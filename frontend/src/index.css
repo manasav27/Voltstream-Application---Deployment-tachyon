@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    margin: 0;
+    background-color: #000000 !important;
+    
+    /* Background Glows */
+    background-image: 
+      radial-gradient(circle at 80% 10%, rgba(139, 92, 246, 0.07) 0%, transparent 36%),
+      radial-gradient(circle at 10% 90%, rgba(34, 197, 94, 0.06) 0%, transparent 34%) !important;
+    
+    background-attachment: fixed;
+    color: #ffffff;
+    min-height: 100vh;
+  }
+
+  /* Grainy texture layer */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    opacity: 0.15;
+    z-index: -1;
+    pointer-events: none;
+    background-image: url('data:image/svg+xml;charset=utf-8,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)"/%3E%3C/svg%3E');
+  }
+}
