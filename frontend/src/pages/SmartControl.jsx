@@ -14,8 +14,13 @@ import {
   Wind,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import PageGrootInsight from '../components/PageGrootInsight';
 
-const API_BASE = 'https://voltstream-api-846651028355.asia-south1.run.app/api/v1';
+const LOCAL_API_BASE = 'http://127.0.0.1:8000/api/v1';
+const DEPLOYED_API_BASE = 'https://voltstream-api-846651028355.asia-south1.run.app/api/v1';
+const API_BASE =
+  process.env.REACT_APP_API_BASE_URL ||
+  (process.env.NODE_ENV === 'development' ? LOCAL_API_BASE : DEPLOYED_API_BASE);
 
 const rooms = [
   { name: 'Living Room', icon: Tv, color: '#f97316' },
@@ -85,24 +90,24 @@ const getLeakSuggestion = (device) => {
   return 'Review runtime and switch to sleep mode when idle.';
 };
 
-const EfficiencyGauge = ({ score }) => {
-  const rotation = -120 + score * 2.4;
-
-  return (  
-    <div className="relative h-20 w-24">
-      <svg viewBox="0 0 120 92" className="h-full w-full">
-        <path d="M20 76 A40 40 0 0 1 100 76" fill="none" stroke="#323847" strokeWidth="14" />
-        <path d="M20 76 A40 40 0 0 1 47 38" fill="none" stroke="#ef4444" strokeWidth="14" />
-        <path d="M47 38 A40 40 0 0 1 80 42" fill="none" stroke="#f97316" strokeWidth="14" />
-        <path d="M80 42 A40 40 0 0 1 100 76" fill="none" stroke="#22c55e" strokeWidth="14" />
-      </svg>
-      <div
-        className="absolute left-[49px] top-[60px] h-8 w-1 origin-bottom rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)]"
-        style={{ transform: `rotate(${rotation}deg)` }}
-      />
+const SummaryCard = ({ title, value, detail, Icon, color }) => (
+  <div
+    className="rounded-2xl border border-white/10 bg-[#202126] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+    style={{
+      borderColor: `${color}44`,
+      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.08), 0 0 24px ${color}18`,
+    }}
+  >
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <p className="text-sm font-semibold text-slate-300">{title}</p>
+        <p className="mt-3 text-2xl font-black text-white">{value}</p>
+        {detail && <p className="mt-2 text-sm text-slate-400">{detail}</p>}
+      </div>
+      <Icon className="h-6 w-6 shrink-0" style={{ color }} />
     </div>
-  );
-};
+  </div>
+);
 
 const DeviceCard = ({ device, index, onToggle, roomColor }) => {
   const DeviceIcon = getDeviceIcon(device.name);
@@ -182,84 +187,82 @@ const ProactiveLeakDetector = ({
   const serviceSlots = ['10:30 AM', '1:15 PM', '4:45 PM'];
 
   return (
-    <aside className="min-w-0">
-      <div className="rounded-2xl border border-white/10 bg-[#202126] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-lg font-black leading-tight text-white">Proactive Energy Leaks AI Detector</h3>
-          <Eye className="h-8 w-8 shrink-0 text-sky-200/80" />
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-[#202126] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-lg font-black leading-tight text-white">Proactive Energy Leaks AI Detector</h3>
+        <Eye className="h-8 w-8 shrink-0 text-sky-200/80" />
+      </div>
+
+      {leakDevices.length === 0 ? (
+        <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3 text-emerald-300">
+          <p className="flex items-center gap-2 font-black">
+            <CheckCircle2 className="h-5 w-5" />
+            All Clear
+          </p>
+          <p className="mt-2 text-sm text-emerald-100/80">No active device is drawing unusual power in this room.</p>
         </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {leakDevices.map((device) => {
+            const isServiceDevice = device.type === 'HVAC' || device.power_draw_w >= 1000;
+            const isOpen = activeActionId === device.id;
+            const isDelivered = deliveredId === device.id;
 
-        {leakDevices.length === 0 ? (
-          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3 text-emerald-300">
-            <p className="flex items-center gap-2 font-black">
-              <CheckCircle2 className="h-5 w-5" />
-              All Clear
-            </p>
-            <p className="mt-2 text-sm text-emerald-100/80">No active device is drawing unusual power in this room.</p>
-          </div>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {leakDevices.map((device) => {
-              const isServiceDevice = device.type === 'HVAC' || device.power_draw_w >= 1000;
-              const isOpen = activeActionId === device.id;
-              const isDelivered = deliveredId === device.id;
-
-              return (
-                <div key={device.id} className="rounded-2xl border border-orange-300/20 bg-orange-400/10 p-3">
-                  <p className="text-sm text-white">
-                    <span className="font-black">{device.name}:</span> {device.power_draw_w.toFixed(0)} W while active
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+            return (
+              <div key={device.id} className="rounded-2xl border border-orange-300/20 bg-orange-400/10 p-3">
+                <p className="text-sm text-white">
+                  <span className="font-black">{device.name}:</span> {device.power_draw_w.toFixed(0)} W while active
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => onTroubleshoot(device.id)}
+                    className="rounded-xl border border-sky-300/25 bg-sky-300/15 px-3 py-2 text-sm font-black text-sky-200"
+                  >
+                    Troubleshoot?
+                  </button>
+                  {isServiceDevice && (
                     <button
-                      onClick={() => onTroubleshoot(device.id)}
-                      className="rounded-xl border border-sky-300/25 bg-sky-300/15 px-3 py-2 text-sm font-black text-sky-200"
+                      onClick={() => onSchedule(device.id)}
+                      className="rounded-xl border border-orange-300/20 bg-orange-300/10 px-3 py-2 text-sm font-black text-orange-200"
                     >
-                      Troubleshoot?
+                      Schedule Service
                     </button>
-                    {isServiceDevice && (
-                      <button
-                        onClick={() => onSchedule(device.id)}
-                        className="rounded-xl border border-orange-300/20 bg-orange-300/10 px-3 py-2 text-sm font-black text-orange-200"
-                      >
-                        Schedule Service
-                      </button>
-                    )}
-                  </div>
-
-                  {isOpen && (
-                    <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white">
-                      <p className="font-semibold text-emerald-100">{getLeakSuggestion(device)}</p>
-                      {selectedSlot?.deviceId === device.id && (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {serviceSlots.map((slot) => (
-                            <button
-                              key={slot}
-                              onClick={() => onSelectSlot(device.id, slot)}
-                              className={`rounded-lg px-3 py-1.5 text-xs font-black ${
-                                selectedSlot.slot === slot
-                                  ? 'bg-emerald-400 text-slate-950'
-                                  : 'bg-white/10 text-white hover:bg-white/15'
-                              }`}
-                            >
-                              {slot}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {isDelivered && (
-                        <p className="mt-3 rounded-lg bg-emerald-400/15 px-3 py-2 text-xs font-black text-emerald-300">
-                          Delivered. Technician slot confirmed.
-                        </p>
-                      )}
-                    </div>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </aside>
+
+                {isOpen && (
+                  <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white">
+                    <p className="font-semibold text-emerald-100">{getLeakSuggestion(device)}</p>
+                    {selectedSlot?.deviceId === device.id && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {serviceSlots.map((slot) => (
+                          <button
+                            key={slot}
+                            onClick={() => onSelectSlot(device.id, slot)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-black ${
+                              selectedSlot.slot === slot
+                                ? 'bg-emerald-400 text-slate-950'
+                                : 'bg-white/10 text-white hover:bg-white/15'
+                            }`}
+                          >
+                            {slot}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {isDelivered && (
+                      <p className="mt-3 rounded-lg bg-emerald-400/15 px-3 py-2 text-xs font-black text-emerald-300">
+                        Delivered. Technician slot confirmed.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -289,6 +292,28 @@ const SmartControl = () => {
     };
 
     fetchDevices();
+  }, []);
+
+  useEffect(() => {
+    const handleDeviceUpdated = (event) => {
+      const updatedDevice = event.detail;
+      if (!updatedDevice?.id) return;
+
+      setDevices((prevDevices) => prevDevices.map((device) =>
+        device.id === updatedDevice.id
+          ? {
+              ...device,
+              ...updatedDevice,
+              room: getDeviceRoom(updatedDevice),
+              is_on: updatedDevice.status === 'ON',
+              power_draw_kw: updatedDevice.power_draw_w ? updatedDevice.power_draw_w / 1000 : 0,
+            }
+          : device
+      ));
+    };
+
+    window.addEventListener('voltstream-device-updated', handleDeviceUpdated);
+    return () => window.removeEventListener('voltstream-device-updated', handleDeviceUpdated);
   }, []);
 
   const toggleDevice = async (id) => {
@@ -347,7 +372,7 @@ const SmartControl = () => {
 
   const activeDevices = filteredDevices.filter((device) => device.is_on); // keeps only devices which are on
   const totalWatts = activeDevices.reduce((total, device) => total + (Number(device.power_draw_w) || 0), 0);
-  const efficiencyScore = Math.max(30, Math.min(96, Math.round(94 - totalWatts / 120)));
+  const activeDeviceNames = activeDevices.map((device) => device.name).join(', ');
   const SelectedRoomIcon = rooms.find((room) => room.name === selectedRoom)?.icon || Tv;
   const selectedRoomColor = rooms.find((room) => room.name === selectedRoom)?.color || '#60a5fa';
   const leakDevices = activeDevices
@@ -373,9 +398,12 @@ const SmartControl = () => {
   };
 
   return (
-    <div className="h-screen overflow-hidden bg-black px-5 py-6 text-white lg:px-7">
-      <div className="mx-auto flex h-full max-w-[1280px] flex-col gap-3">
-        <h2 className="text-2xl font-black text-white drop-shadow-[0_0_14px_rgba(255,255,255,0.16)]">Rooms</h2>
+    <div className="h-screen overflow-y-auto bg-black px-5 py-6 text-white lg:px-7">
+      <div className="mx-auto flex max-w-[1280px] flex-col gap-5">
+        <header>
+          <h2 className="text-3xl font-black text-white drop-shadow-[0_0_14px_rgba(255,255,255,0.16)]">Devices</h2>
+          <p className="mt-1 text-sm text-slate-400">Manage and monitor your smart devices</p>
+        </header>
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {rooms.map((room) => {
@@ -405,29 +433,21 @@ const SmartControl = () => {
           })}
         </div>
 
-        <div className="glass-shell min-h-0 flex-1 overflow-hidden rounded-[2.5rem] border border-white/10 bg-[#17181c] p-4 shadow-[0_22px_70px_rgba(0,0,0,0.42)]">
-          {loading ? (
-            <div className="flex h-full items-center justify-center">
-              <div className="h-12 w-12 animate-spin rounded-full border-t-2 border-emerald-300" />
-            </div>
-          ) : (
-            <div className="grid h-full grid-cols-1 gap-4 overflow-y-auto pr-2 custom-scrollbar lg:grid-cols-[300px_minmax(0,1fr)]">
+        {loading ? (
+          <div className="glass-shell flex min-h-[520px] items-center justify-center rounded-[2.5rem] border border-white/10 bg-[#17181c] p-4 shadow-[0_22px_70px_rgba(0,0,0,0.42)]">
+            <div className="h-12 w-12 animate-spin rounded-full border-t-2 border-emerald-300" />
+          </div>
+        ) : (
+          <>
+            <section className="grid grid-cols-1 items-start gap-4 xl:grid-cols-3">
               <div className="space-y-4">
-                <div className="rounded-2xl border border-white/10 bg-[#202126] p-4">
-                  <h3 className="text-lg font-black text-white">{selectedRoom} at a Glance</h3>
-                  <div className="mt-4 grid grid-cols-[1fr_auto] gap-3">
-                    <div>
-                      <p className="text-sm text-slate-300">Total Room Draw:</p>
-                      <p className="text-2xl font-black">{totalWatts.toFixed(0)} W</p>
-                      <p className="mt-3 text-sm text-slate-300">Active Devices:</p>
-                      <p className="text-2xl font-black">{activeDevices.length}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-300">Efficiency Score</p>
-                      <EfficiencyGauge score={efficiencyScore} />
-                    </div>
-                  </div>
-                </div>
+                <SummaryCard
+                  title="Total Room Draw"
+                  value={`${(totalWatts / 1000).toFixed(2)} kW`}
+                  detail="Based on devices currently ON"
+                  Icon={Power}
+                  color={selectedRoomColor}
+                />
                 <ProactiveLeakDetector
                   leakDevices={leakDevices}
                   activeActionId={activeLeakActionId}
@@ -439,29 +459,60 @@ const SmartControl = () => {
                 />
               </div>
 
-              <div className="min-w-0 xl:pl-8">
-                <div className="mb-4 flex items-center gap-3">
-                  <SelectedRoomIcon
-                    className="h-6 w-6"
-                    style={{ color: selectedRoomColor }}
-                  />
-                  <div>
-                    <h3 className="text-xl font-black text-white">{selectedRoom}</h3>
-                    <p className="text-xs font-black uppercase tracking-[0.28em] text-slate-500">Smart Control Hub</p>
+              <SummaryCard
+                title="Active Devices"
+                value={activeDevices.length}
+                detail={activeDeviceNames || 'No devices online'}
+                Icon={CheckCircle2}
+                color={selectedRoomColor}
+              />
+
+              <aside>
+                <div className="rounded-2xl border border-white/10 bg-[#202126] p-4">
+                  <h3 className="text-lg font-black text-white">{selectedRoom} at a Glance</h3>
+                  <div className="mt-4">
+                    <div>
+                      <p className="text-sm text-slate-300">Total Room Draw:</p>
+                      <p className="text-2xl font-black">{totalWatts.toFixed(0)} W</p>
+                    </div>
                   </div>
                 </div>
+              </aside>
+            </section>
 
-                <motion.div layout className="grid max-w-[770px] grid-cols-1 gap-4 xl:grid-cols-2">
-                  <AnimatePresence mode="popLayout">
-                    {filteredDevices.map((device, index) => (
-                      <DeviceCard key={device.id} device={device} index={index} onToggle={toggleDevice} roomColor={selectedRoomColor} />
-                    ))}
-                  </AnimatePresence>
-                </motion.div>
+            <section>
+              <div className="mb-4 flex items-center gap-3">
+                <SelectedRoomIcon
+                  className="h-6 w-6"
+                  style={{ color: selectedRoomColor }}
+                />
+                <div>
+                  <h3 className="text-2xl font-black text-white">{selectedRoom} Devices</h3>
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-slate-500">Devices</p>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+
+              <motion.div layout className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                <AnimatePresence mode="popLayout">
+                  {filteredDevices.map((device, index) => (
+                    <DeviceCard key={device.id} device={device} index={index} onToggle={toggleDevice} roomColor={selectedRoomColor} />
+                  ))}
+                </AnimatePresence>
+              </motion.div>
+            </section>
+
+            <PageGrootInsight
+              page="Smart Control"
+              data={{
+                selectedRoom,
+                selectedRoomDevices: filteredDevices,
+                activeDevices,
+                totalWatts,
+                leakDevices,
+              }}
+            />
+          </>
+        )}
       </div>
 
       <style>{`

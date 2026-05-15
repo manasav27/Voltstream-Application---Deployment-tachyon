@@ -22,3 +22,20 @@ class BillingSummary(BaseModel):
     current_month_cost: float
     projected_cost: float
     budget_limit: float
+
+# NEW CHAT REQUEST MODEL
+class ChatRequest(BaseModel):
+    question: str
+
+# NEW CHAT RESPONSE MODEL
+class ChatResponse(BaseModel):
+    answer: str
+    device: Optional[DeviceResponse] = None
+
+class PageInsightRequest(BaseModel):
+    page: str
+    question: str
+    data: dict
+
+class PageInsightResponse(BaseModel):
+    answer: str

@@ -21,3 +21,22 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+
+# Virtual environments
+venv/
+.env/
+
+# RAG / Vector DB
+chroma_db/
+
+# OS files
+Thumbs.db
+
+# Logs
+*.log

@@ -1,13 +1,23 @@
 from fastapi import FastAPI, HTTPException, Query
+from qa import router as qa_router
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-
-from models import LivePowerStatus, EnergyDataPoint, DeviceResponse, BillingSummary
-from mock_data import get_fluctuating_live_data, HISTORY_DATA, DEVICES, BILLING_SUMMARY as BILLING
+from models import (
+    LivePowerStatus,
+    EnergyDataPoint,
+    DeviceResponse,
+    BillingSummary
+)
+from mock_data import (
+    get_fluctuating_live_data,
+    HISTORY_DATA,
+    DEVICES,
+    BILLING_SUMMARY as BILLING
+)
+from chat_routes import router as chat_router
 
 app = FastAPI(title="VoltStream API")
-
-# Allow CORS for the frontend
+app.include_router(qa_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,13 +25,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(chat_router)
 
 @app.get("/api/v1/dashboard/live", response_model=LivePowerStatus)
 def get_live_dashboard():
     return get_fluctuating_live_data()
 
 @app.get("/api/v1/analytics/history", response_model=List[EnergyDataPoint])
-def get_analytics_history(period: str = Query("daily", pattern="^(daily|weekly|monthly)$")):
+def get_analytics_history(
+    period: str = Query("daily", pattern="^(daily|weekly|monthly)$")
+):
     if period in HISTORY_DATA:
         return HISTORY_DATA[period]
     raise HTTPException(status_code=400, detail="Invalid period")
@@ -38,7 +51,6 @@ def update_device(device_id: str, status: str = Query(...)):
             if status == "OFF":
                 device["power_draw_w"] = 0
             else:
-                # Mock restoring power draw based on type
                 name = device["name"].lower()
                 device_power_defaults = {
                     "living room ac": 1500,
@@ -59,12 +71,19 @@ def update_device(device_id: str, status: str = Query(...)):
                     "bathroom exhaust fan": 60,
                     "bathroom mirror light": 80,
                 }
-                power_defaults = {"HVAC": 1500, "Appliance": 400, "Outdoor": 1200, "Vehicle": 7200}
-                device["power_draw_w"] = device_power_defaults.get(name, power_defaults.get(device["type"], 100))
+                power_defaults = {
+                    "HVAC": 1500,
+                    "Appliance": 400,
+                    "Outdoor": 1200,
+                    "Vehicle": 7200
+                }
+                device["power_draw_w"] = device_power_defaults.get(
+                    name,
+                    power_defaults.get(device["type"], 100)
+                )
             return device
     raise HTTPException(status_code=404, detail="Device not found")
 
 @app.get("/api/v1/billing/summary", response_model=BillingSummary)
 def get_billing_summary():
     return BILLING
-#hello world

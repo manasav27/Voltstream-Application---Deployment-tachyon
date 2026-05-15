@@ -9,8 +9,13 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
+import PageGrootInsight from '../components/PageGrootInsight';
 
-const API_BASE = 'https://voltstream-api-846651028355.asia-south1.run.app/api/v1';
+const LOCAL_API_BASE = 'http://127.0.0.1:8000/api/v1';
+const DEPLOYED_API_BASE = 'https://voltstream-api-846651028355.asia-south1.run.app/api/v1';
+const API_BASE =
+  process.env.REACT_APP_API_BASE_URL ||
+  (process.env.NODE_ENV === 'development' ? LOCAL_API_BASE : DEPLOYED_API_BASE);
 const USD_TO_INR = 83.85;
 const formatINR = (amount) => new Intl.NumberFormat('en-IN', { //converts to proper INR format with currency symbol and no decimal places
   style: 'currency',
@@ -100,7 +105,7 @@ const Invoices = () => {
     const baseBilling = data || {
       current_month_cost: 0,
       projected_cost: 0,
-      budget_limit: 100,
+      budget_limit: 50000,
     };
     const activeDevices = devices.filter((device) => device.status === 'ON');
     const activeWatts = activeDevices.reduce((total, device) => total + (Number(device.power_draw_w) || 0), 0);
@@ -314,6 +319,17 @@ const Invoices = () => {
                 </div>
               </Panel>
             </section>
+
+            <PageGrootInsight
+              page="Billing and Invoices"
+              data={{
+                billingSummary: data,
+                billingMetrics,
+                budgetPercent,
+                isOverBudget,
+                invoices,
+              }}
+            />
           </div>
         </div>
       </div>

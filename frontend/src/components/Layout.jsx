@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { Activity, BarChart2, Cpu, FileText } from "lucide-react";
+import ChatWidget from "./ChatWidget";
 
 export default function Layout({ children }) {
   const location = useLocation();
@@ -19,8 +20,47 @@ export default function Layout({ children }) {
         
         {/* Logo at top of sidebar */}
         <div className="p-8 border-b border-white/5">
-          <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-sky-300 via-emerald-300 to-amber-300 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(56,189,248,0.35)]">
-            VoltStream
+          <h1 className="flex items-center gap-3 text-3xl font-black tracking-tighter">
+            <svg
+              className="h-10 w-10 shrink-0 drop-shadow-[0_0_16px_rgba(239,68,68,0.55)]"
+              viewBox="0 0 96 96"
+              role="img"
+              aria-label="VoltStream lightning logo"
+            >
+              <circle
+                cx="48"
+                cy="48"
+                r="38"
+                fill="none"
+                stroke="#ef1d2f"
+                strokeWidth="7"
+                strokeDasharray="162 80"
+                strokeLinecap="round"
+                transform="rotate(-42 48 48)"
+              />
+              <circle
+                cx="48"
+                cy="48"
+                r="38"
+                fill="none"
+                stroke="#171113"
+                strokeWidth="7"
+                strokeDasharray="132 110"
+                strokeLinecap="round"
+                transform="rotate(137 48 48)"
+              />
+              <path
+                d="M58 5 24 52h21L35 91l38-51H52L58 5Z"
+                fill="#171113"
+              />
+              <path
+                d="M63 7 33 45h24L43 89l31-48H55L63 7Z"
+                fill="#ef1d2f"
+              />
+            </svg>
+            <span className="bg-gradient-to-r from-red-500 via-slate-100 to-sky-300 bg-clip-text text-transparent drop-shadow-[0_0_16px_rgba(239,68,68,0.42)]">
+              VoltStream
+            </span>
           </h1>
         </div>
 
@@ -53,6 +93,8 @@ export default function Layout({ children }) {
       <main className="flex-1 bg-black">
         {children}
       </main>
+
+      <ChatWidget />
 
     </div>
   );
