@@ -7,12 +7,7 @@ export const API_BASES = Array.from(new Set([PRIMARY_API_BASE, LOCAL_API_BASE, D
 
 export const starterMessages = [];
 
-export const ragStarterMessages = [
-  {
-    role: 'bot',
-    text: 'RAG Q&A is ready. Ask me from the loaded energy PDFs.',
-  },
-];
+export const ragStarterMessages = [];
 
 export const suggestionQuestions = [
   'Explain quantum computing simply.',

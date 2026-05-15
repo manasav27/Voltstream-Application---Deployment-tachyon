@@ -60,7 +60,7 @@ def ask_question(data: QuestionRequest):
 
     retrieved_chunks = results['documents'][0]
     distances = results['distances'][0]
-    # If no relevant chunks found
+    # If no relevant chunks found, keep the RAG bot restricted to the loaded PDFs.
     if not retrieved_chunks or not distances or distances[0] > MAX_DISTANCE:
         return {
             "answer": "I don't have that information"
@@ -70,14 +70,22 @@ def ask_question(data: QuestionRequest):
 
     # Prompt Gemini
     prompt = f"""
-    You are a helpful energy assistant.
-    Answer ONLY from the provided context.
-    If the answer is not found in the context,
-    reply exactly with:
+    You are Groot, a helpful RAG assistant for the loaded energy guide PDFs.
+    Use semantic search results from the PDFs as your source material.
+    Answer only when the PDF context contains information relevant to the question.
+    Use your language ability to combine, summarize, and explain the PDF content
+    naturally in your own words. You may make simple logical connections from
+    the provided context, but do not add outside facts or answer from general
+    world knowledge.
+    If the question is outside the loaded PDF topics, such as celebrities,
+    history, space, entertainment, or unrelated general knowledge, reply exactly:
+    "I don't have that information"
+    If the PDF context does not support the answer, reply exactly:
     "I don't have that information"
 
-    Context:
+    PDF context:
     {context}
+
     Question:
     {question}
     """
