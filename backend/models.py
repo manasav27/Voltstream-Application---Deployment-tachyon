@@ -17,6 +17,16 @@ class DeviceResponse(BaseModel):
     type: str
     status: str
     power_draw_w: int
+    room: Optional[str] = None
+    is_custom: bool = False
+    default_power_w: Optional[int] = None
+
+class DeviceCreateRequest(BaseModel):
+    name: str
+    type: str
+    room: str
+    status: str = "OFF"
+    power_draw_w: int = 0
 
 class BillingSummary(BaseModel):
     current_month_cost: float

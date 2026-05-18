@@ -7,8 +7,10 @@ import {
   Coffee,
   Eye,
   Lightbulb,
+  Plus,
   Power,
   Refrigerator,
+  Trash2,
   Tv,
   WashingMachine,
   Wind,
@@ -30,6 +32,7 @@ const rooms = [
 ];
 
 const getDefaultPower = (device) => {
+  if (device.default_power_w) return device.default_power_w;
   const name = device.name.toLowerCase();
   if (name.includes('oven')) return 2200;
   if (name.includes('water heater')) return 2000;
@@ -109,7 +112,7 @@ const SummaryCard = ({ title, value, detail, Icon, color }) => (
   </div>
 );
 
-const DeviceCard = ({ device, index, onToggle, roomColor }) => {
+const DeviceCard = ({ device, index, onToggle, onDelete, roomColor }) => {
   const DeviceIcon = getDeviceIcon(device.name);
   const accent = roomColor || getDeviceColor(device);
   const suggestedMode = getSuggestedMode(device);
@@ -144,17 +147,26 @@ const DeviceCard = ({ device, index, onToggle, roomColor }) => {
             {device.is_on ? 'Live' : 'Offline'}
           </span>
         </div>
-        <button
-          aria-label={`Toggle ${device.name}`}
-          onClick={() => onToggle(device.id)}
-          className={`relative h-6 w-12 shrink-0 rounded-full transition-colors ${device.is_on ? '' : 'bg-white/10'}`}
-          style={device.is_on ? { backgroundColor: accent } : undefined}
-        >
-          <motion.span
-            animate={{ x: device.is_on ? 25 : 4 }}
-            className="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow-lg"
-          />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            aria-label={`Delete ${device.name}`}
+            onClick={() => onDelete(device.id)}
+            className="grid h-8 w-8 place-items-center rounded-full border border-red-300/20 bg-red-400/10 text-red-200 transition hover:bg-red-400/20"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+          <button
+            aria-label={`Toggle ${device.name}`}
+            onClick={() => onToggle(device.id)}
+            className={`relative h-6 w-12 rounded-full transition-colors ${device.is_on ? '' : 'bg-white/10'}`}
+            style={device.is_on ? { backgroundColor: accent } : undefined}
+          >
+            <motion.span
+              animate={{ x: device.is_on ? 25 : 4 }}
+              className="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow-lg"
+            />
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-4">
@@ -273,17 +285,26 @@ const SmartControl = () => {
   const [activeLeakActionId, setActiveLeakActionId] = useState(null);
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [deliveredId, setDeliveredId] = useState(null);
+  const [showAddDevice, setShowAddDevice] = useState(false);
+  const [newDevice, setNewDevice] = useState({
+    name: '',
+    type: 'Appliance',
+    status: 'OFF',
+    power_draw_w: 100,
+  });
+
+  const hydrateDevice = (device) => ({
+    ...device,
+    room: device.room || getDeviceRoom(device),
+    is_on: device.status === 'ON',
+    power_draw_kw: device.power_draw_w ? device.power_draw_w / 1000 : 0,
+  });
 
   useEffect(() => {
     const fetchDevices = async () => {
       try {
         const res = await axios.get(`${API_BASE}/devices`);
-        setDevices(res.data.map((device) => ({
-          ...device,
-          room: getDeviceRoom(device),
-          is_on: device.status === 'ON',
-          power_draw_kw: device.power_draw_w ? device.power_draw_w / 1000 : 0,
-        })));
+        setDevices(res.data.map(hydrateDevice));
       } catch (error) {
         console.error('Error fetching devices', error);
       } finally {
@@ -292,6 +313,8 @@ const SmartControl = () => {
     };
 
     fetchDevices();
+    const interval = setInterval(fetchDevices, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -304,7 +327,7 @@ const SmartControl = () => {
           ? {
               ...device,
               ...updatedDevice,
-              room: getDeviceRoom(updatedDevice),
+              room: updatedDevice.room || device.room || getDeviceRoom(updatedDevice),
               is_on: updatedDevice.status === 'ON',
               power_draw_kw: updatedDevice.power_draw_w ? updatedDevice.power_draw_w / 1000 : 0,
             }
@@ -343,7 +366,7 @@ const SmartControl = () => {
           ? {
               ...device,
               ...persisted,
-              room: getDeviceRoom(persisted),
+              room: persisted.room || device.room || getDeviceRoom(persisted),
               is_on: persisted.status === 'ON',
               power_draw_kw: persisted.power_draw_w ? persisted.power_draw_w / 1000 : 0,
             }
@@ -362,6 +385,49 @@ const SmartControl = () => {
             }
           : device
       ));
+    }
+  };
+
+  const addDevice = async (event) => {
+    event.preventDefault();
+    const trimmedName = newDevice.name.trim();
+    if (!trimmedName) return;
+
+    const powerDraw = Math.max(0, Number(newDevice.power_draw_w) || 0);
+
+    try {
+      const res = await axios.post(`${API_BASE}/devices`, {
+        name: trimmedName,
+        type: newDevice.type,
+        room: selectedRoom,
+        status: newDevice.status,
+        power_draw_w: powerDraw,
+      });
+
+      setDevices((prevDevices) => [...prevDevices, hydrateDevice(res.data)]);
+      setNewDevice({
+        name: '',
+        type: 'Appliance',
+        status: 'OFF',
+        power_draw_w: 100,
+      });
+      setShowAddDevice(false);
+    } catch (error) {
+      console.error('Failed to add device:', error);
+    }
+  };
+
+  const deleteDevice = async (id) => {
+    const deviceToDelete = devices.find((device) => device.id === id);
+    if (!deviceToDelete) return;
+
+    setDevices((prevDevices) => prevDevices.filter((device) => device.id !== id));
+
+    try {
+      await axios.delete(`${API_BASE}/devices/${id}`);
+    } catch (error) {
+      console.error('Failed to delete device:', error);
+      setDevices((prevDevices) => [...prevDevices, deviceToDelete]);
     }
   };
 
@@ -481,21 +547,84 @@ const SmartControl = () => {
             </section>
 
             <section>
-              <div className="mb-4 flex items-center gap-3">
-                <SelectedRoomIcon
-                  className="h-6 w-6"
-                  style={{ color: selectedRoomColor }}
-                />
-                <div>
-                  <h3 className="text-2xl font-black text-white">{selectedRoom} Devices</h3>
-                  <p className="text-xs font-black uppercase tracking-[0.28em] text-slate-500">Devices</p>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <SelectedRoomIcon
+                    className="h-6 w-6"
+                    style={{ color: selectedRoomColor }}
+                  />
+                  <div>
+                    <h3 className="text-2xl font-black text-white">{selectedRoom} Devices</h3>
+                    <p className="text-xs font-black uppercase tracking-[0.28em] text-slate-500">Devices</p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddDevice((current) => !current)}
+                  className="flex min-h-[42px] items-center justify-center gap-2 rounded-full border border-sky-300/30 bg-sky-400/10 px-4 text-sm font-black text-sky-100 transition hover:bg-sky-400/20"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Device
+                </button>
               </div>
+
+              {showAddDevice && (
+                <form
+                  onSubmit={addDevice}
+                  className="mb-4 grid grid-cols-1 gap-3 rounded-2xl border border-white/10 bg-[#202126] p-4 md:grid-cols-[minmax(0,1fr)_160px_130px_130px_auto]"
+                >
+                  <input
+                    value={newDevice.name}
+                    onChange={(event) => setNewDevice((current) => ({ ...current, name: event.target.value }))}
+                    placeholder={`${selectedRoom} device name`}
+                    className="min-h-[42px] rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-sky-300/40"
+                  />
+                  <select
+                    value={newDevice.type}
+                    onChange={(event) => setNewDevice((current) => ({ ...current, type: event.target.value }))}
+                    className="min-h-[42px] rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-sky-300/40"
+                  >
+                    <option>Appliance</option>
+                    <option>HVAC</option>
+                    <option>Vehicle</option>
+                    <option>Outdoor</option>
+                  </select>
+                  <select
+                    value={newDevice.status}
+                    onChange={(event) => setNewDevice((current) => ({ ...current, status: event.target.value }))}
+                    className="min-h-[42px] rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-sky-300/40"
+                  >
+                    <option>OFF</option>
+                    <option>ON</option>
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newDevice.power_draw_w}
+                    onChange={(event) => setNewDevice((current) => ({ ...current, power_draw_w: event.target.value }))}
+                    className="min-h-[42px] rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-sky-300/40"
+                    aria-label="Power draw watts"
+                  />
+                  <button
+                    type="submit"
+                    className="min-h-[42px] rounded-xl bg-sky-400 px-4 text-sm font-black text-slate-950 transition hover:bg-sky-300"
+                  >
+                    Save
+                  </button>
+                </form>
+              )}
 
               <motion.div layout className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                 <AnimatePresence mode="popLayout">
                   {filteredDevices.map((device, index) => (
-                    <DeviceCard key={device.id} device={device} index={index} onToggle={toggleDevice} roomColor={selectedRoomColor} />
+                    <DeviceCard
+                      key={device.id}
+                      device={device}
+                      index={index}
+                      onToggle={toggleDevice}
+                      onDelete={deleteDevice}
+                      roomColor={selectedRoomColor}
+                    />
                   ))}
                 </AnimatePresence>
               </motion.div>

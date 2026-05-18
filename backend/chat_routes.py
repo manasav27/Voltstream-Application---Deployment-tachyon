@@ -12,10 +12,10 @@ from models import ChatRequest, ChatResponse, PageInsightRequest, PageInsightRes
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY) # connect gemini sdk with api key
 model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1") # addssame route for each begining like chat/page isnights
 
 GREETING_PATTERN = re.compile(
     r"^\s*(hi|hello|hey|hii|hai|yo|good\s+(morning|afternoon|evening)|namaste)\s*[!.?]*\s*$",
@@ -25,14 +25,23 @@ IDENTITY_PATTERN = re.compile(
     r"\b(who\s+(are|r)\s+(you|u)|what\s+(are|r)\s+(you|u)|your\s+name|ur\s+name|what\s+do\s+(you|u)\s+do|wt\s+do\s+(you|u)\s+do)\b",
     re.IGNORECASE,
 )
-SELF_INTRO_PREFIX_PATTERN = re.compile(
+SELF_INTRO_PREFIX_PATTERN = re.compile( 
     r"^\s*(i\s*(am|'m)\s+groot\.?\s*)+",
+    re.IGNORECASE,
+)
+SELF_INTRO_ANYWHERE_PATTERN = re.compile(
+    r"\s*\b(i\s*(am|'m)\s+groot)\.?\s*",
     re.IGNORECASE,
 )
 
 
-@router.post("/chat", response_model=ChatResponse)
-async def chat_with_ai(request: ChatRequest):
+def remove_self_intro(text):
+    answer = SELF_INTRO_PREFIX_PATTERN.sub("", text.strip()).strip()
+    return SELF_INTRO_ANYWHERE_PATTERN.sub(" ", answer).strip()
+
+
+@router.post("/chat", response_model=ChatResponse)  # hey fastapi , create a postapi with endpoint chat
+async def chat_with_ai(request: ChatRequest): #“When someone hits /chat, run this function”
     try:
         question = request.question.strip()
 
@@ -57,9 +66,9 @@ async def chat_with_ai(request: ChatRequest):
         {question}
         """
         response = model.generate_content(prompt)
-        answer = SELF_INTRO_PREFIX_PATTERN.sub("", response.text.strip()).strip()
+        answer = remove_self_intro(response.text) # Remove self-intro if present
         return {
-            "answer": answer or response.text.strip()
+            "answer": answer or "I don't know that."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -71,6 +80,8 @@ async def page_insight(request: PageInsightRequest):
         prompt = f"""
         You are Groot, VoltStream's page-aware energy assistant.
         The user is asking about the current {request.page} page.
+        Do not introduce yourself, say "I am Groot", or add your name in the
+        answer unless the user explicitly asks who you are.
 
         Explain what is happening on this page using the provided page data.
         If there is any trouble, risk, high usage, budget warning, inefficient device,
@@ -84,6 +95,7 @@ async def page_insight(request: PageInsightRequest):
         {json.dumps(request.data, indent=2)}
         """
         response = model.generate_content(prompt)
-        return {"answer": response.text}
+        answer = remove_self_intro(response.text) # Remove self-intro if present
+        return {"answer": answer or "I don't know that."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

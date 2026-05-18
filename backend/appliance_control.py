@@ -1,7 +1,7 @@
 import re
 from threading import Timer
 
-from mock_data import DEVICES
+from database import get_devices, update_device_power
 
 
 DEVICE_POWER_DEFAULTS = {
@@ -27,6 +27,8 @@ DEVICE_POWER_DEFAULTS = {
 ROOM_WORDS = {"living", "room", "bedroom", "kitchen", "bathroom", "pool"}
 DEVICE_WORDS = {
     "ac",
+    "air",
+    "computer",
     "refrigerator",
     "washing",
     "machine",
@@ -43,6 +45,11 @@ DEVICE_WORDS = {
     "coffee",
     "maker",
     "fan",
+    "laptop",
+    "monitor",
+    "purifier",
+    "speaker",
+    "speakers",
 }
 
 DEVICE_ALIASES = {
@@ -54,7 +61,8 @@ DEVICE_ALIASES = {
 
 
 def _normalize(text):
-    return re.sub(r"[^a-z0-9 ]+", " ", text.lower()).strip()
+    normalized = re.sub(r"[^a-z0-9 ]+", " ", text.lower()).strip()
+    return re.sub(r"\brm\b", "room", normalized)
 
 
 def _delay_seconds(text):
@@ -79,24 +87,29 @@ def _find_device(command):
 
     for alias, device_name in DEVICE_ALIASES.items():
         if alias in normalized_command:
-            return next((device for device in DEVICES if device["name"] == device_name), None)
+            return next((device for device in get_devices() if device["name"] == device_name), None)
 
     best_device = None
     best_score = 0
 
-    for device in DEVICES:
+    for device in get_devices():
         device_name = _normalize(device["name"])
+        device_room = _normalize(device.get("room") or "")
         device_words = set(device_name.split())
+        room_words = set(device_room.split())
+        searchable_words = device_words | room_words
+        generic_device_words = device_words - ROOM_WORDS
         matched_device_words = command_words & device_words & DEVICE_WORDS
-        matched_room_words = command_words & device_words & ROOM_WORDS
-        score = (len(matched_device_words) * 3) + len(matched_room_words)
+        matched_generic_words = command_words & generic_device_words
+        matched_room_words = command_words & searchable_words & ROOM_WORDS
+        score = (len(matched_device_words) * 3) + (len(matched_generic_words) * 2) + len(matched_room_words)
 
         if "lamp" in device_words and "lamps" in command_words:
             score += 3
         if "light" in device_words and "lights" in command_words:
             score += 3
 
-        if score > best_score and matched_device_words:
+        if score > best_score and (matched_device_words or matched_generic_words):
             best_device = device
             best_score = score
 
@@ -105,18 +118,20 @@ def _find_device(command):
 
 def _apply_device_action(device, action, brightness=None):
     device_name = device["name"].lower()
-    default_power = DEVICE_POWER_DEFAULTS.get(device_name, max(device["power_draw_w"], 100))
+    default_power = device.get("default_power_w") or DEVICE_POWER_DEFAULTS.get(
+        device_name,
+        max(device["power_draw_w"], 100),
+    )
 
     if action == "off":
-        device["status"] = "OFF"
-        device["power_draw_w"] = 0
-        return
+        return update_device_power(device["id"], "OFF", 0)
 
-    device["status"] = "ON"
     if brightness is not None:
-        device["power_draw_w"] = round(default_power * brightness / 100)
+        power_draw_w = round(default_power * brightness / 100)
     else:
-        device["power_draw_w"] = default_power
+        power_draw_w = default_power
+
+    return update_device_power(device["id"], "ON", power_draw_w)
 
 
 def _device_payload(device):
@@ -126,6 +141,9 @@ def _device_payload(device):
         "type": device["type"],
         "status": device["status"],
         "power_draw_w": device["power_draw_w"],
+        "room": device.get("room"),
+        "is_custom": device.get("is_custom", False),
+        "default_power_w": device.get("default_power_w"),
     }
 
 
@@ -155,7 +173,9 @@ def handle_appliance_command(question):
 
     device = _find_device(question)
     if not device:
-        return None
+        return {
+            "answer": "I don't have access to that device. Add it on the Smart Devices page first, then I can control it."
+        }
 
     delay, delay_label = _delay_seconds(normalized_question)
     if delay:
@@ -169,14 +189,14 @@ def handle_appliance_command(question):
             "answer": f"Scheduled: I will {action_text} {device['name']}{delay_label}."
         }
 
-    _apply_device_action(device, action, brightness)
+    updated_device = _apply_device_action(device, action, brightness)
     if brightness is not None:
         return {
-            "answer": f"Done. {device['name']} is ON at {brightness}%.",
-            "device": _device_payload(device),
+            "answer": f"Done. {updated_device['name']} is ON at {brightness}%.",
+            "device": _device_payload(updated_device),
         }
 
     return {
-        "answer": f"Done. {device['name']} is now {device['status']}.",
-        "device": _device_payload(device),
+        "answer": f"Done. {updated_device['name']} is now {updated_device['status']}.",
+        "device": _device_payload(updated_device),
     }
