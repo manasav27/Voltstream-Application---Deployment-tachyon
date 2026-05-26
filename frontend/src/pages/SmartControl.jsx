@@ -1,22 +1,36 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import {
-  Bath,
-  Bed,
+  Bell,
+  Bot,
+  CalendarClock,
   CheckCircle2,
-  Coffee,
-  Eye,
-  Lightbulb,
+  HelpCircle,
   Plus,
   Power,
-  Refrigerator,
-  Trash2,
-  Tv,
-  WashingMachine,
-  Wind,
+  Send,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageGrootInsight from '../components/PageGrootInsight';
+import { DeviceCard, ProactiveLeakDetector, SummaryCard } from '../components/smart-control/DeviceWidgets';
+import {
+  extractRequestedDeviceName,
+  findCommandMatches,
+  getAmbiguousDeviceKind,
+  getBulkCommandRequest,
+  getCommandAction,
+  getCommandSchedule,
+  getDefaultPower,
+  getDeviceRoom,
+  getRoomOptionText,
+  getSavingsInsight,
+  inferDeviceType,
+  isDeviceControlCommand,
+  isDeviceStatusCommand,
+  isPreviousDeviceReference,
+  pickBestCommandMatch,
+  rooms,
+} from '../components/smart-control/deviceAgentUtils';
 
 const LOCAL_API_BASE = 'http://127.0.0.1:8000/api/v1';
 const DEPLOYED_API_BASE = 'https://voltstream-api-846651028355.asia-south1.run.app/api/v1';
@@ -24,257 +38,822 @@ const API_BASE =
   process.env.REACT_APP_API_BASE_URL ||
   (process.env.NODE_ENV === 'development' ? LOCAL_API_BASE : DEPLOYED_API_BASE);
 
-const rooms = [
-  { name: 'Living Room', icon: Tv, color: '#f97316' },
-  { name: 'Kitchen', icon: Coffee, color: '#3b82f6' },
-  { name: 'Bedroom', icon: Bed, color: '#8b5cf6' },
-  { name: 'Bathroom', icon: Bath, color: '#ff4d45' },
-];
+const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddDevice }) => {
+  const [command, setCommand] = useState('');
+  const [agentState, setAgentState] = useState(null);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [undoAction, setUndoAction] = useState(null);
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0);
+  const inputRef = useRef(null);
+  const scheduledTimersRef = useRef([]);
+  const undoTimerRef = useRef(null);
+  const lastDeviceRef = useRef(null);
 
-const getDefaultPower = (device) => {
-  if (device.default_power_w) return device.default_power_w;
-  const name = device.name.toLowerCase();
-  if (name.includes('oven')) return 2200;
-  if (name.includes('water heater')) return 2000;
-  if (name.includes('heater')) return 1500;
-  if (name.includes('ac')) return name.includes('bedroom') ? 1200 : 1500;
-  if (name.includes('dishwasher')) return 1200;
-  if (name.includes('coffee')) return 900;
-  if (name.includes('washing')) return 500;
-  if (name.includes('refrigerator') || name.includes('fridge')) return 400;
-  if (name.includes('tv')) return 180;
-  if (name.includes('fan')) return 75;
-  if (name.includes('lamp') || name.includes('light')) return 60;
-  return device.type === 'Vehicle' ? 7200 : device.type === 'HVAC' ? 1200 : 400;
-};
+  useEffect(() => () => {
+    scheduledTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    clearInterval(undoTimerRef.current);
+  }, []);
 
-const getDeviceRoom = (device) => {  
-  const name = device.name.toLowerCase();
-  if (name.includes('kitchen') || name.includes('refrigerator') || name.includes('fridge') || name.includes('dishwasher') || name.includes('coffee') || name.includes('oven')) return 'Kitchen';
-  if (name.includes('bedroom') || name.includes('bedside')) return 'Bedroom';  
-  if (name.includes('bathroom') || name.includes('water heater')) return 'Bathroom';
-  return 'Living Room';
-};
+  const getAgentFinalData = (payload) => {
+    if (typeof payload !== 'string') return payload?.data || payload;
 
-const getDeviceIcon = (name) => {
-  const lowerName = name.toLowerCase();
-  if (lowerName.includes('washing')) return WashingMachine;
-  if (lowerName.includes('lamp') || lowerName.includes('light')) return Lightbulb;
-  if (lowerName.includes('ac') || lowerName.includes('fan')) return Wind;
-  if (lowerName.includes('tv')) return Tv;
-  if (lowerName.includes('fridge') || lowerName.includes('refrigerator')) return Refrigerator;
-  return Power;
-};
+    const events = payload
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const errorEvent = events.find((event) => event.event === 'error');
+    if (errorEvent) throw new Error(errorEvent.detail || 'Agent command failed.');
 
-const getDeviceColor = (device) => {
-  const name = device.name.toLowerCase();
-  if (name.includes('ac') || name.includes('fan') || name.includes('heater')) return '#8b5cf6';
-  if (name.includes('coffee') || name.includes('oven') || name.includes('dishwasher')) return '#f97316';
-  if (name.includes('fridge') || name.includes('refrigerator')) return '#3b82f6';
-  if (name.includes('lamp') || name.includes('light')) return '#ec4899';
-  if (name.includes('washing')) return '#22c55e';
-  if (name.includes('tv')) return '#60a5fa';
-  return '#6ee75a';
-};
+    return [...events].reverse().find((event) => event.event === 'final')?.data;
+  };
 
-const getSuggestedMode = (device) => {
-  if (!device.is_on) return 'Sleep';
-  if (device.power_draw_kw >= 1.5) return 'Boost';
-  if (device.power_draw_kw >= 0.5) return 'Eco';
-  return 'Low';
-};
+  const runAgentCommand = async (message) => {
+    const response = await axios.post(`${API_BASE}/agent`, { message });
+    return getAgentFinalData(response.data);
+  };
 
-const getLeakSuggestion = (device) => {
-  const name = device.name.toLowerCase();
-  if (name.includes('fridge') || name.includes('refrigerator')) return 'Check door seal and set cooling to normal mode.';
-  if (name.includes('ac') || name.includes('fan') || name.includes('heater')) return 'Clean filter and run eco mode for 20 minutes.';
-  if (name.includes('oven') || name.includes('dishwasher') || name.includes('washing')) return 'Delay heavy cycle until low-load hours.';
-  if (name.includes('coffee') || name.includes('lamp') || name.includes('light')) return 'Use an auto-off timer after peak use.';
-  return 'Review runtime and switch to sleep mode when idle.';
-};
+  const executeDeviceAction = async (device, action, nextState) => {
+    setIsExecuting(true);
+    try {
+      const previousStatus = device.is_on ? 'ON' : 'OFF';
+      const updatedDevice = await onExecuteCommand(device.id, action);
+      const actedDevice = updatedDevice || device;
+      lastDeviceRef.current = actedDevice;
+      setAgentState({
+        type: 'done',
+        command,
+        device: actedDevice,
+        action,
+        message: `${device.name} turned ${action}`,
+        insight: getSavingsInsight(device, action),
+        detail: nextState?.detail,
+      });
 
-const SummaryCard = ({ title, value, detail, Icon, color }) => (
-  <div
-    className="rounded-2xl border border-white/10 bg-[#202126] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-    style={{
-      borderColor: `${color}44`,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.08), 0 0 24px ${color}18`,
-    }}
-  >
-    <div className="flex items-start justify-between gap-4">
-      <div>
-        <p className="text-sm font-semibold text-slate-300">{title}</p>
-        <p className="mt-3 text-2xl font-black text-white">{value}</p>
-        {detail && <p className="mt-2 text-sm text-slate-400">{detail}</p>}
-      </div>
-      <Icon className="h-6 w-6 shrink-0" style={{ color }} />
-    </div>
-  </div>
-);
+      startUndoTimer({
+        device: actedDevice,
+        previousStatus,
+        command,
+      });
+    } catch (error) {
+      setAgentState({
+        type: 'error',
+        command,
+        message: `Couldn't update ${device.name}. Please try again.`,
+      });
+    } finally {
+      setIsExecuting(false);
+    }
+  };
 
-const DeviceCard = ({ device, index, onToggle, onDelete, roomColor }) => {
-  const DeviceIcon = getDeviceIcon(device.name);
-  const accent = roomColor || getDeviceColor(device);
-  const suggestedMode = getSuggestedMode(device);
-  const watts = device.is_on ? device.power_draw_w : 0;
+  const startUndoTimer = (nextUndoAction) => {
+    clearInterval(undoTimerRef.current);
+    setUndoAction(nextUndoAction);
+    setUndoSecondsLeft(5);
+    undoTimerRef.current = setInterval(() => {
+      setUndoSecondsLeft((seconds) => {
+        if (seconds <= 1) {
+          clearInterval(undoTimerRef.current);
+          setUndoAction(null);
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+  };
+
+  const executeBulkDeviceAction = async (bulkRequest, commandText) => {
+    setIsExecuting(true);
+    try {
+      const previousStates = bulkRequest.devices.map((device) => ({
+        originalDevice: device,
+        previousStatus: device.is_on ? 'ON' : 'OFF',
+      }));
+      const agentMessage = bulkRequest.room ? `${commandText} in ${bulkRequest.room}` : commandText;
+      const agentResult = await runAgentCommand(agentMessage);
+      const agentDevices = agentResult?.devices || (agentResult?.device ? [agentResult.device] : []);
+      const updatedDevicesById = new Map(agentDevices.map((device) => [device.id, device]));
+      const updates = previousStates.map(({ originalDevice, previousStatus }) => {
+        const updatedDevice = updatedDevicesById.get(originalDevice.id) || {
+          ...originalDevice,
+          status: bulkRequest.action,
+          power_draw_w: bulkRequest.action === 'OFF' ? 0 : getDefaultPower(originalDevice),
+        };
+        const hydratedDevice = {
+          ...originalDevice,
+          ...updatedDevice,
+          room: updatedDevice.room || originalDevice.room || getDeviceRoom(updatedDevice),
+          is_on: updatedDevice.status === 'ON',
+          power_draw_kw: updatedDevice.power_draw_w ? updatedDevice.power_draw_w / 1000 : 0,
+        };
+        window.dispatchEvent(new CustomEvent('voltstream-device-updated', { detail: hydratedDevice }));
+        return {
+          originalDevice,
+          previousStatus,
+          updatedDevice: hydratedDevice,
+        };
+      });
+
+      setAgentState({
+        type: 'done',
+        command: commandText,
+        action: bulkRequest.action,
+        message: agentResult?.answer || `${updates.length} ${bulkRequest.label} turned ${bulkRequest.action}`,
+        detail: `${bulkRequest.sourceState} devices only`,
+      });
+
+      window.dispatchEvent(new CustomEvent('voltstream-page-insight-alert', {
+        detail: {
+          page: 'Smart Control',
+          action: bulkRequest.action,
+          scope: bulkRequest.label,
+          count: updates.length,
+          message: `${updates.length} ${bulkRequest.label} turned ${bulkRequest.action}`,
+          devices: updates.map(({ originalDevice, updatedDevice }) => ({
+            id: (updatedDevice || originalDevice).id,
+            name: (updatedDevice || originalDevice).name,
+            type: (updatedDevice || originalDevice).type,
+          })),
+          suggestion: bulkRequest.action === 'OFF'
+            ? 'Suggestion: Keep essential devices like the refrigerator online if needed, and use this low-load window to save on standby power.'
+            : 'Suggestion: Turning many devices on together can spike demand and increase your bill. Consider switching high-power appliances on one at a time.',
+        },
+      }));
+
+      startUndoTimer({
+        type: 'bulk',
+        devices: updates.map(({ originalDevice, previousStatus, updatedDevice }) => ({
+          device: updatedDevice || originalDevice,
+          previousStatus,
+        })),
+        command: commandText,
+      });
+    } catch (error) {
+      setAgentState({
+        type: 'error',
+        command: commandText,
+        message: `Couldn't update ${bulkRequest.label}. Please try again.`,
+      });
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  const openBulkConfirmation = (bulkRequest, commandText) => {
+    if (bulkRequest.scopeCount === 0) {
+      setAgentState({
+        type: 'error',
+        command: commandText,
+        message: `No ${bulkRequest.label} were found.`,
+      });
+      return;
+    }
+
+    if (bulkRequest.devices.length === 0) {
+      setAgentState({
+        type: 'done',
+        command: commandText,
+        action: bulkRequest.action,
+        message: `${bulkRequest.label} are already ${bulkRequest.action}`,
+        detail: `${bulkRequest.sourceState} devices only`,
+      });
+      return;
+    }
+
+    setAgentState({
+      type: 'bulkConfirm',
+      command: commandText,
+      action: bulkRequest.action,
+      bulkRequest,
+      message: `Turn ${bulkRequest.action} ${bulkRequest.devices.length} ${bulkRequest.label}?`,
+      detail: `${bulkRequest.sourceState} devices only`,
+    });
+  };
+
+  const executeBulkScopeChoice = (room) => {
+    if (!agentState?.command || !agentState?.action) return;
+    const bulkRequest = getBulkCommandRequest(agentState.command, devices, agentState.action, room);
+    if (!bulkRequest) return;
+    openBulkConfirmation(bulkRequest, agentState.command);
+  };
+
+  const confirmBulkAction = async () => {
+    if (!agentState?.bulkRequest) return;
+    await executeBulkDeviceAction(agentState.bulkRequest, agentState.command);
+  };
+
+  const undoLastAction = async () => {
+    if (!undoAction || isExecuting) return;
+
+    clearInterval(undoTimerRef.current);
+    setIsExecuting(true);
+    try {
+      if (undoAction.type === 'bulk') {
+        const restoredDevices = await Promise.all(
+          undoAction.devices.map(({ device, previousStatus }) =>
+            onExecuteCommand(device.id, previousStatus)
+          )
+        );
+
+        setAgentState({
+          type: 'done',
+          command: `Undo: ${undoAction.command}`,
+          action: 'UNDO',
+          message: `${restoredDevices.length} devices restored`,
+          insight: null,
+        });
+        setUndoAction(null);
+        setUndoSecondsLeft(0);
+        return;
+      }
+
+      const restoredDevice = await onExecuteCommand(undoAction.device.id, undoAction.previousStatus);
+      setAgentState({
+        type: 'done',
+        command: `Undo: ${undoAction.command}`,
+        device: restoredDevice || undoAction.device,
+        action: undoAction.previousStatus,
+        message: `${undoAction.device.name} restored to ${undoAction.previousStatus}`,
+        insight: null,
+      });
+      setUndoAction(null);
+      setUndoSecondsLeft(0);
+    } catch (error) {
+      setAgentState({
+        type: 'error',
+        command: `Undo: ${undoAction.command}`,
+        message: undoAction.type === 'bulk'
+          ? 'Couldn\'t undo the bulk update. Please try again.'
+          : `Couldn't undo ${undoAction.device.name}. Please try again.`,
+      });
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  const addUnknownDevice = async () => {
+    if (!agentState?.deviceName || !agentState?.action || isExecuting) return;
+
+    setIsExecuting(true);
+    try {
+      const type = inferDeviceType(agentState.deviceName);
+      const addedDevice = await onAddDevice({
+        name: agentState.deviceName,
+        type,
+        room: selectedRoom,
+        status: agentState.action,
+        power_draw_w: getDefaultPower({ name: agentState.deviceName, type }),
+      });
+
+      setAgentState({
+        type: 'done',
+        command,
+        device: addedDevice,
+        action: agentState.action,
+        message: `${addedDevice.name} added and turned ${agentState.action}`,
+        insight: getSavingsInsight(addedDevice, agentState.action),
+        detail: `${selectedRoom} device`,
+      });
+      lastDeviceRef.current = addedDevice;
+    } catch (error) {
+      setAgentState({
+        type: 'error',
+        command,
+        message: `Couldn't add ${agentState.deviceName}. Please try again.`,
+      });
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  const submitCommand = async (event) => {
+    event.preventDefault();
+    const trimmedCommand = command.trim();
+    if (!trimmedCommand || isExecuting) return;
+
+    const action = getCommandAction(trimmedCommand);
+    const isStatusRequest = isDeviceStatusCommand(trimmedCommand);
+    const schedule = getCommandSchedule(trimmedCommand);
+    const matches = findCommandMatches(devices, trimmedCommand);
+    const bulkRequest = getBulkCommandRequest(trimmedCommand, devices, action);
+
+    if (!isDeviceControlCommand(trimmedCommand)) {
+      setAgentState({
+        type: 'outOfScope',
+        command: trimmedCommand,
+        message: "I can only control smart devices. I don't have the information you're asking about.",
+      });
+      return;
+    }
+
+    if (isStatusRequest && !action) {
+      setIsExecuting(true);
+      try {
+        const agentResult = await runAgentCommand(trimmedCommand);
+        const statusDevice = agentResult?.device;
+        if (statusDevice) {
+          lastDeviceRef.current = statusDevice;
+        }
+        const fallbackMessage = statusDevice
+          ? `${statusDevice.name} is ${statusDevice.status} and drawing ${statusDevice.power_draw_w} W.`
+          : 'I checked the device status.';
+
+        setAgentState({
+          type: 'done',
+          command: trimmedCommand,
+          device: statusDevice,
+          action: 'STATUS',
+          message: agentResult?.answer || fallbackMessage,
+        });
+      } catch (error) {
+        setAgentState({
+          type: 'error',
+          command: trimmedCommand,
+          message: "Couldn't get that device status. Please try again.",
+        });
+      } finally {
+        setIsExecuting(false);
+      }
+      return;
+    }
+
+    if (!action) {
+      setAgentState({
+        type: 'clarify',
+        command: trimmedCommand,
+        message: 'Which device should Groot control?',
+        devices: devices.slice(0, 4),
+        action: action || 'OFF',
+      });
+      return;
+    }
+
+    if (bulkRequest) {
+      if (schedule) {
+        setAgentState({
+          type: 'error',
+          command: trimmedCommand,
+          message: 'Bulk scheduling is not available yet. Run the bulk command now instead.',
+        });
+        return;
+      }
+
+      if (bulkRequest.needsScopeChoice) {
+        setAgentState({
+          type: 'bulkScope',
+          command: trimmedCommand,
+          action,
+          message: `Turn ${action} which devices?`,
+          detail: `${bulkRequest.sourceState} devices only`,
+          rooms: rooms.map((room) => room.name),
+        });
+        return;
+      }
+
+      openBulkConfirmation(bulkRequest, trimmedCommand);
+      return;
+    }
+
+    if (matches.length === 0) {
+      const deviceName = extractRequestedDeviceName(trimmedCommand);
+      const previousDevice = lastDeviceRef.current;
+      if (previousDevice && isPreviousDeviceReference(trimmedCommand)) {
+        setAgentState({
+          type: 'confirmPrevious',
+          command: trimmedCommand,
+          device: previousDevice,
+          action,
+          message: `Do you want me to turn ${action === 'ON' ? 'on' : 'off'} the previous device, ${previousDevice.name}?`,
+        });
+        return;
+      }
+
+      setAgentState({
+        type: 'unknownDevice',
+        command: trimmedCommand,
+        deviceName: deviceName || 'that device',
+        action,
+        message: `We don't have ${deviceName || 'that device'} in your devices list.`,
+      });
+      return;
+    }
+
+    const actionableMatches = matches.filter((device) =>
+      action === 'OFF' ? device.is_on : !device.is_on
+    );
+
+    if (actionableMatches.length === 0) {
+      const ambiguousKind = getAmbiguousDeviceKind(trimmedCommand, matches);
+      setAgentState({
+        type: 'done',
+        command: trimmedCommand,
+        action,
+        message: `All matching ${ambiguousKind}${matches.length === 1 || ambiguousKind === 'AC' ? '' : 's'} are already ${action}`,
+      });
+      return;
+    }
+
+    const commandMatches = actionableMatches;
+    const uniqueRooms = [...new Set(commandMatches.map((device) => device.room).filter(Boolean))];
+    const lowerCommand = trimmedCommand.toLowerCase();
+    const ambiguousKind = getAmbiguousDeviceKind(trimmedCommand, commandMatches);
+    const roomWasNamed = uniqueRooms.some((room) => lowerCommand.includes(room.toLowerCase()));
+    const shouldClarifyRoom = commandMatches.length > 1
+      && uniqueRooms.length > 1
+      && !roomWasNamed
+      && (
+        /\b(ac|air\s*conditioner|air\s*conditioning)\b/.test(lowerCommand)
+        || /\blights?\b|\blamps?\b/.test(lowerCommand)
+        || /\bfans?\b/.test(lowerCommand)
+        || /\bheaters?\b/.test(lowerCommand)
+      );
+    const isGenericLightsCommand = /\blights?\b/.test(lowerCommand)
+      && !uniqueRooms.some((room) => trimmedCommand.toLowerCase().includes(room.toLowerCase()));
+
+    if (shouldClarifyRoom || (commandMatches.length > 1 && isGenericLightsCommand)) {
+      const firstRoom = uniqueRooms[0] || 'This room';
+      const firstRoomCount = commandMatches.filter((device) => device.room === firstRoom).length;
+      setAgentState({
+        type: 'clarify',
+        command: trimmedCommand,
+        message: ambiguousKind === 'AC' ? 'Which AC should Groot control?' : 'Which room?',
+        detail: `${firstRoom} has ${firstRoomCount} matching ${ambiguousKind}${firstRoomCount === 1 || ambiguousKind === 'AC' ? '' : 's'}`,
+        rooms: uniqueRooms,
+        matches: commandMatches,
+        action,
+        schedule,
+        ambiguousKind,
+      });
+      return;
+    }
+
+    const device = pickBestCommandMatch(commandMatches, trimmedCommand, selectedRoom);
+
+    if (schedule) {
+      setAgentState({
+        type: 'schedule',
+        command: trimmedCommand,
+        device,
+        action,
+        schedule,
+        message: `Schedule ${device.name} ${action === 'ON' ? 'on' : 'off'} ${schedule.label}?`,
+      });
+      return;
+    }
+
+    await executeDeviceAction(device, action);
+  };
+
+  const confirmPreviousDevice = async () => {
+    if (!agentState?.device || !agentState?.action) return;
+    const currentDevice = devices.find((device) => device.id === agentState.device.id) || agentState.device;
+    await executeDeviceAction(currentDevice, agentState.action, {
+      detail: 'previous device selected',
+    });
+  };
+
+  const executeRoomChoice = async (room) => {
+    const currentState = agentState;
+    const roomDevices = currentState.matches?.filter((device) => device.room === room) || [];
+    const device = roomDevices[0];
+    if (!device) return;
+
+    if (currentState.schedule) {
+      setAgentState({
+        type: 'schedule',
+        command: currentState.command,
+        device,
+        action: currentState.action,
+        schedule: currentState.schedule,
+        message: `Schedule ${device.name} ${currentState.action === 'ON' ? 'on' : 'off'} ${currentState.schedule.label}?`,
+      });
+      return;
+    }
+
+    await executeDeviceAction(device, currentState.action, {
+      detail: `${room} selected`,
+    });
+  };
+
+  const executeDeviceChoice = async (device) => {
+    if (agentState.schedule) {
+      setAgentState({
+        type: 'schedule',
+        command: agentState.command,
+        device,
+        action: agentState.action,
+        schedule: agentState.schedule,
+        message: `Schedule ${device.name} ${agentState.action === 'ON' ? 'on' : 'off'} ${agentState.schedule.label}?`,
+      });
+      return;
+    }
+
+    await executeDeviceAction(device, agentState.action);
+  };
+
+  const confirmSchedule = () => {
+    if (!agentState?.device) return;
+
+    const scheduledCommand = agentState.command;
+    const scheduledDevice = agentState.device;
+    const scheduledAction = agentState.action;
+    const scheduledLabel = agentState.schedule.label;
+    const delayMs = Math.max(agentState.schedule.delayMs, 0);
+
+    const timerId = setTimeout(() => {
+      onExecuteCommand(scheduledDevice.id, scheduledAction).catch((error) => {
+        console.error('Failed to run scheduled command:', error);
+      });
+      scheduledTimersRef.current = scheduledTimersRef.current.filter((id) => id !== timerId);
+    }, delayMs);
+
+    scheduledTimersRef.current = [...scheduledTimersRef.current, timerId];
+    setAgentState({
+      type: 'scheduled',
+      command: scheduledCommand,
+      device: scheduledDevice,
+      action: scheduledAction,
+      message: `${scheduledDevice.name} will turn ${scheduledAction} ${scheduledLabel}`,
+    });
+  };
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.96, y: 16 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.92 }}
-      transition={{ type: 'spring', stiffness: 220, damping: 24, delay: index * 0.03 }}
-      style={device.is_on ? {
-        borderColor: `${accent}88`,
-        boxShadow: `0 0 30px ${accent}30`,
-      } : undefined}
-      className={`min-h-[138px] rounded-2xl border p-3.5 backdrop-blur-xl transition-all ${
-        device.is_on
-          ? 'bg-[#202126]'
-          : 'border-white/10 bg-slate-950/35 opacity-90'
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-wrap gap-2">
-          <span
-            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.2em] ${device.is_on ? 'text-slate-950' : 'bg-white/10 text-slate-400'}`}
-            style={device.is_on ? { backgroundColor: accent } : undefined}
-          >
-            Device
-          </span>
-          <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.2em] ${device.is_on ? 'bg-white text-slate-950' : 'bg-white/10 text-slate-400'}`}>
-            {device.is_on ? 'Live' : 'Offline'}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <section className="rounded-2xl border border-orange-400/70 bg-[#101116] p-3 shadow-[0_0_26px_rgba(249,115,22,0.16)]">
+      <form
+        onSubmit={submitCommand}
+        className="flex min-h-[58px] items-center gap-3 rounded-xl border border-orange-400/70 bg-[#1b1c2d] px-4"
+      >
+          <Bot className="h-5 w-5 shrink-0 text-orange-400" />
+          <input
+            ref={inputRef}
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder="Ask Groot to control devices..."
+            className="min-w-0 flex-1 bg-transparent text-base font-semibold text-white outline-none placeholder:text-slate-400"
+          />
+          <span className="hidden text-sm text-slate-500 md:inline">press Enter anytime</span>
           <button
-            aria-label={`Delete ${device.name}`}
-            onClick={() => onDelete(device.id)}
-            className="grid h-8 w-8 place-items-center rounded-full border border-red-300/20 bg-red-400/10 text-red-200 transition hover:bg-red-400/20"
+            type="submit"
+            disabled={isExecuting}
+            aria-label="Send command"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-orange-500 text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
           >
-            <Trash2 className="h-4 w-4" />
+            <Send className="h-4 w-4" />
           </button>
-          <button
-            aria-label={`Toggle ${device.name}`}
-            onClick={() => onToggle(device.id)}
-            className={`relative h-6 w-12 rounded-full transition-colors ${device.is_on ? '' : 'bg-white/10'}`}
-            style={device.is_on ? { backgroundColor: accent } : undefined}
+      </form>
+
+      <AnimatePresence mode="wait">
+        {agentState && (
+          <motion.div
+            key={`${agentState.type}-${agentState.command}`}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mt-3 rounded-xl border border-white/10 bg-black/25 p-3"
           >
-            <motion.span
-              animate={{ x: device.is_on ? 25 : 4 }}
-              className="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow-lg"
-            />
-          </button>
-        </div>
-      </div>
+            <div className="rounded-lg bg-white/5 px-3 py-2 text-sm font-semibold text-slate-300">
+              <span className="mr-2 text-orange-400">&gt;</span>
+              "{agentState.command}"
+            </div>
 
-      <div className="mt-4 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          <h4 className="truncate text-base font-black text-white">{device.name}</h4>
-          <p className={`mt-1.5 text-xl font-black ${device.is_on ? 'text-white' : 'text-slate-500'}`}>
-            {(watts / 1000).toFixed(watts >= 1000 ? 1 : 2).replace(/\.0$|0$/g, '')} <span className="text-sm">kW</span>
-          </p>
-          <p className="mt-3 text-sm text-slate-400">
-            Suggest Mode <span className="ml-2 rounded-lg bg-slate-600/50 px-2.5 py-1 text-xs font-black uppercase text-white">{suggestedMode}</span>
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center justify-center">
-          <DeviceIcon className={`h-9 w-9 ${device.is_on ? '' : 'text-slate-600'}`} style={device.is_on ? { color: accent } : undefined} />
-        </div>
-      </div>
-    </motion.div>
-  );
-};
-
-const ProactiveLeakDetector = ({
-  leakDevices,
-  activeActionId,
-  deliveredId,
-  selectedSlot,
-  onTroubleshoot,
-  onSchedule,
-  onSelectSlot,
-}) => {
-  const serviceSlots = ['10:30 AM', '1:15 PM', '4:45 PM'];
-
-  return (
-    <div className="min-w-0 rounded-2xl border border-white/10 bg-[#202126] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="text-lg font-black leading-tight text-white">Proactive Energy Leaks AI Detector</h3>
-        <Eye className="h-8 w-8 shrink-0 text-sky-200/80" />
-      </div>
-
-      {leakDevices.length === 0 ? (
-        <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3 text-emerald-300">
-          <p className="flex items-center gap-2 font-black">
-            <CheckCircle2 className="h-5 w-5" />
-            All Clear
-          </p>
-          <p className="mt-2 text-sm text-emerald-100/80">No active device is drawing unusual power in this room.</p>
-        </div>
-      ) : (
-        <div className="mt-4 space-y-3">
-          {leakDevices.map((device) => {
-            const isServiceDevice = device.type === 'HVAC' || device.power_draw_w >= 1000;
-            const isOpen = activeActionId === device.id;
-            const isDelivered = deliveredId === device.id;
-
-            return (
-              <div key={device.id} className="rounded-2xl border border-orange-300/20 bg-orange-400/10 p-3">
-                <p className="text-sm text-white">
-                  <span className="font-black">{device.name}:</span> {device.power_draw_w.toFixed(0)} W while active
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => onTroubleshoot(device.id)}
-                    className="rounded-xl border border-sky-300/25 bg-sky-300/15 px-3 py-2 text-sm font-black text-sky-200"
-                  >
-                    Troubleshoot?
-                  </button>
-                  {isServiceDevice && (
-                    <button
-                      onClick={() => onSchedule(device.id)}
-                      className="rounded-xl border border-orange-300/20 bg-orange-300/10 px-3 py-2 text-sm font-black text-orange-200"
-                    >
-                      Schedule Service
-                    </button>
-                  )}
+            {agentState.type === 'done' && (
+              <>
+                <div className="mt-3 flex items-center gap-3 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-sm font-black text-emerald-300">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <div>
+                    {agentState.message}
+                    {agentState.detail && <span className="ml-2 font-semibold text-emerald-100/70">({agentState.detail})</span>}
+                  </div>
                 </div>
 
-                {isOpen && (
-                  <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white">
-                    <p className="font-semibold text-emerald-100">{getLeakSuggestion(device)}</p>
-                    {selectedSlot?.deviceId === device.id && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {serviceSlots.map((slot) => (
-                          <button
-                            key={slot}
-                            onClick={() => onSelectSlot(device.id, slot)}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-black ${
-                              selectedSlot.slot === slot
-                                ? 'bg-emerald-400 text-slate-950'
-                                : 'bg-white/10 text-white hover:bg-white/15'
-                            }`}
-                          >
-                            {slot}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {isDelivered && (
-                      <p className="mt-3 rounded-lg bg-emerald-400/15 px-3 py-2 text-xs font-black text-emerald-300">
-                        Delivered. Technician slot confirmed.
-                      </p>
-                    )}
+                {agentState.insight && (
+                  <div className="mt-3 rounded-xl border border-violet-400/40 bg-violet-400/10 px-3 py-2 text-sm font-black text-violet-200">
+                    {agentState.insight}
                   </div>
                 )}
+
+                {undoAction && undoSecondsLeft > 0 && (
+                  <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-[#22223a]">
+                    <div className="flex min-h-[58px] items-center justify-between gap-3 px-4">
+                      <span className="text-sm font-semibold text-slate-400">Changed your mind?</span>
+                      <button
+                        type="button"
+                        onClick={undoLastAction}
+                        disabled={isExecuting}
+                        className="rounded-lg px-3 py-2 text-sm font-black text-orange-300 transition hover:bg-orange-400/10 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        Undo ({undoSecondsLeft}s)
+                      </button>
+                    </div>
+                    <div className="h-1 bg-white/8">
+                      <div
+                        className="h-full bg-orange-400 transition-all duration-1000"
+                        style={{ width: `${(undoSecondsLeft / 5) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {agentState.type === 'schedule' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-sky-400/50 bg-sky-400/10 px-3 py-2 text-sm font-black text-sky-200">
+                  <CalendarClock className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmSchedule}
+                    disabled={isExecuting}
+                    className="min-h-[36px] rounded-lg bg-sky-400 px-5 text-sm font-black text-slate-950 transition hover:bg-sky-300 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentState(null)}
+                    className="min-h-[36px] rounded-lg border border-white/10 px-5 text-sm font-black text-slate-400 transition hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+            )}
+
+            {agentState.type === 'scheduled' && (
+              <div className="mt-3 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-sm font-black text-emerald-300">
+                <CalendarClock className="mr-2 inline h-4 w-4" />
+                {agentState.message}
+              </div>
+            )}
+
+            {agentState.type === 'bulkScope' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                  {agentState.detail && <span className="ml-2 text-orange-100/70">{agentState.detail}</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => executeBulkScopeChoice(null)}
+                    disabled={isExecuting}
+                    className="min-h-[34px] rounded-lg border border-orange-400/60 bg-orange-400/10 px-3 text-sm font-black text-orange-200 transition hover:bg-orange-400/20 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    All devices
+                  </button>
+                  {agentState.rooms?.map((room) => (
+                    <button
+                      key={room}
+                      type="button"
+                      onClick={() => executeBulkScopeChoice(room)}
+                      disabled={isExecuting}
+                      className="min-h-[34px] rounded-lg border border-white/10 bg-white/5 px-3 text-sm font-black text-slate-300 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {room}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'bulkConfirm' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                  {agentState.detail && <span className="ml-2 text-orange-100/70">{agentState.detail}</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmBulkAction}
+                    disabled={isExecuting}
+                    className="min-h-[36px] rounded-lg bg-orange-500 px-4 text-sm font-black text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentState(null)}
+                    className="min-h-[36px] rounded-lg border border-white/10 px-4 text-sm font-black text-slate-400 transition hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'confirmPrevious' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmPreviousDevice}
+                    disabled={isExecuting}
+                    className="min-h-[36px] rounded-lg bg-orange-500 px-4 text-sm font-black text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Yes, do it
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentState(null)}
+                    className="min-h-[36px] rounded-lg border border-white/10 px-4 text-sm font-black text-slate-400 transition hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'clarify' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                  {agentState.detail && <span className="ml-2 text-orange-100/70">{agentState.detail}</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {agentState.rooms?.map((room) => (
+                    (() => {
+                      const roomMatchCount = agentState.matches?.filter((device) => device.room === room).length || 0;
+                      return (
+                    <button
+                      key={room}
+                      type="button"
+                      onClick={() => executeRoomChoice(room)}
+                      disabled={isExecuting}
+                      className="min-h-[34px] rounded-lg border border-orange-400/60 bg-orange-400/10 px-3 text-sm font-black text-orange-200 transition hover:bg-orange-400/20 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {getRoomOptionText(room, agentState.ambiguousKind, roomMatchCount)}
+                    </button>
+                      );
+                    })()
+                  ))}
+                  {agentState.devices?.map((device) => (
+                    <button
+                      key={device.id}
+                      type="button"
+                      onClick={() => executeDeviceChoice(device)}
+                      disabled={isExecuting}
+                      className="min-h-[34px] rounded-lg border border-white/10 bg-white/5 px-3 text-sm font-black text-slate-300 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {device.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'unknownDevice' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message} Do you want me to add it?
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={addUnknownDevice}
+                    disabled={isExecuting}
+                    className="min-h-[36px] rounded-lg bg-orange-500 px-4 text-sm font-black text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Yes, add it
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentState(null)}
+                    className="min-h-[36px] rounded-lg border border-white/10 px-4 text-sm font-black text-slate-400 transition hover:bg-white/10"
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'error' && (
+              <div className="mt-3 rounded-xl border border-red-400/40 bg-red-400/10 px-3 py-2 text-sm font-black text-red-200">
+                {agentState.message}
+              </div>
+            )}
+
+            {agentState.type === 'outOfScope' && (
+              <div className="mt-3 rounded-xl border border-orange-400/50 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-200">
+                {agentState.message}
+              </div>
+            )}
+
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
   );
 };
 
@@ -286,6 +865,9 @@ const SmartControl = () => {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [deliveredId, setDeliveredId] = useState(null);
   const [showAddDevice, setShowAddDevice] = useState(false);
+  const [insightWarning, setInsightWarning] = useState(null);
+  const [warningPulseId, setWarningPulseId] = useState(0);
+  const insightRef = useRef(null);
   const [newDevice, setNewDevice] = useState({
     name: '',
     type: 'Appliance',
@@ -339,19 +921,36 @@ const SmartControl = () => {
     return () => window.removeEventListener('voltstream-device-updated', handleDeviceUpdated);
   }, []);
 
-  const toggleDevice = async (id) => {
-    const deviceToUpdate = devices.find((device) => device.id === id);
-    if (!deviceToUpdate) return;
+  useEffect(() => {
+    const handleInsightAlert = (event) => {
+      if (event.detail?.page && event.detail.page !== 'Smart Control') return;
+      setInsightWarning(event.detail);
+      setWarningPulseId((current) => current + 1);
+    };
 
-    const updatedStatus = !deviceToUpdate.is_on;
-    const optimisticWatts = updatedStatus ? getDefaultPower(deviceToUpdate) : 0;
+    window.addEventListener('voltstream-page-insight-alert', handleInsightAlert);
+    return () => window.removeEventListener('voltstream-page-insight-alert', handleInsightAlert);
+  }, []);
+
+  const openInsightWarning = () => {
+    insightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setInsightWarning((current) => current ? { ...current, seen: true } : current);
+  };
+
+  const setDeviceStatus = async (id, status) => {
+    const deviceToUpdate = devices.find((device) => device.id === id);
+    if (!deviceToUpdate) return null;
+
+    const nextStatus = status === 'ON' ? 'ON' : 'OFF';
+    const nextIsOn = nextStatus === 'ON';
+    const optimisticWatts = nextIsOn ? getDefaultPower(deviceToUpdate) : 0;
 
     setDevices((prevDevices) => prevDevices.map((device) =>
       device.id === id
         ? {
             ...device,
-            is_on: updatedStatus,
-            status: updatedStatus ? 'ON' : 'OFF',
+            is_on: nextIsOn,
+            status: nextStatus,
             power_draw_w: optimisticWatts,
             power_draw_kw: optimisticWatts / 1000,
           }
@@ -359,33 +958,46 @@ const SmartControl = () => {
     ));
 
     try {
-      const res = await axios.patch(`${API_BASE}/devices/${id}?status=${updatedStatus ? 'ON' : 'OFF'}`);
+      const res = await axios.patch(`${API_BASE}/devices/${id}?status=${nextStatus}`);
       const persisted = res.data;
+      const hydratedDevice = {
+        ...deviceToUpdate,
+        ...persisted,
+        room: persisted.room || deviceToUpdate.room || getDeviceRoom(persisted),
+        is_on: persisted.status === 'ON',
+        power_draw_kw: persisted.power_draw_w ? persisted.power_draw_w / 1000 : 0,
+      };
+
       setDevices((prevDevices) => prevDevices.map((device) =>
         device.id === id
-          ? {
-              ...device,
-              ...persisted,
-              room: persisted.room || device.room || getDeviceRoom(persisted),
-              is_on: persisted.status === 'ON',
-              power_draw_kw: persisted.power_draw_w ? persisted.power_draw_w / 1000 : 0,
-            }
+          ? hydratedDevice
           : device
       ));
+
+      window.dispatchEvent(new CustomEvent('voltstream-device-updated', { detail: hydratedDevice }));
+      return hydratedDevice;
     } catch (error) {
       console.error('Failed to persist device state:', error);
       setDevices((prevDevices) => prevDevices.map((device) =>
         device.id === id
           ? {
               ...device,
-              is_on: !updatedStatus,
-              status: !updatedStatus ? 'ON' : 'OFF',
+              is_on: deviceToUpdate.is_on,
+              status: deviceToUpdate.status,
               power_draw_w: deviceToUpdate.power_draw_w,
               power_draw_kw: deviceToUpdate.power_draw_kw,
             }
           : device
       ));
+      throw error;
     }
+  };
+
+  const toggleDevice = async (id) => {
+    const deviceToUpdate = devices.find((device) => device.id === id);
+    if (!deviceToUpdate) return;
+
+    await setDeviceStatus(id, deviceToUpdate.is_on ? 'OFF' : 'ON');
   };
 
   const addDevice = async (event) => {
@@ -417,6 +1029,27 @@ const SmartControl = () => {
     }
   };
 
+  const addDeviceFromAgent = async ({ name, type, room, status, power_draw_w }) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Device name is required');
+
+    const nextStatus = status === 'ON' ? 'ON' : 'OFF';
+    const powerDraw = Math.max(0, Number(power_draw_w) || 100);
+
+    const res = await axios.post(`${API_BASE}/devices`, {
+      name: trimmedName,
+      type: type || 'Appliance',
+      room: room || selectedRoom,
+      status: nextStatus,
+      power_draw_w: powerDraw,
+    });
+
+    const hydrated = hydrateDevice(res.data);
+    setDevices((prevDevices) => [...prevDevices, hydrated]);
+    window.dispatchEvent(new CustomEvent('voltstream-device-updated', { detail: hydrated }));
+    return hydrated;
+  };
+
   const deleteDevice = async (id) => {
     const deviceToDelete = devices.find((device) => device.id === id);
     if (!deviceToDelete) return;
@@ -439,7 +1072,7 @@ const SmartControl = () => {
   const activeDevices = filteredDevices.filter((device) => device.is_on); // keeps only devices which are on
   const totalWatts = activeDevices.reduce((total, device) => total + (Number(device.power_draw_w) || 0), 0);
   const activeDeviceNames = activeDevices.map((device) => device.name).join(', ');
-  const SelectedRoomIcon = rooms.find((room) => room.name === selectedRoom)?.icon || Tv;
+  const SelectedRoomIcon = rooms.find((room) => room.name === selectedRoom)?.icon || rooms[0].icon;
   const selectedRoomColor = rooms.find((room) => room.name === selectedRoom)?.color || '#60a5fa';
   const leakDevices = activeDevices
     .filter((device) => device.power_draw_w >= 350 || device.type === 'HVAC')
@@ -466,10 +1099,42 @@ const SmartControl = () => {
   return (
     <div className="h-screen overflow-y-auto bg-black px-5 py-6 text-white lg:px-7">
       <div className="mx-auto flex max-w-[1280px] flex-col gap-5">
-        <header>
-          <h2 className="text-3xl font-black text-white drop-shadow-[0_0_14px_rgba(255,255,255,0.16)]">Devices</h2>
-          <p className="mt-1 text-sm text-slate-400">Manage and monitor your smart devices</p>
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-3xl font-black text-white drop-shadow-[0_0_14px_rgba(255,255,255,0.16)]">Devices</h2>
+            <p className="mt-1 text-sm text-slate-400">Manage and monitor your smart devices</p>
+          </div>
+
+          {insightWarning && (
+            <button
+              type="button"
+              onClick={openInsightWarning}
+              className="group flex min-h-[44px] items-center gap-3 rounded-full border border-red-300/50 bg-red-500/10 px-3 text-left text-red-100 shadow-[0_0_26px_rgba(248,113,113,0.22)] transition hover:bg-red-500/15"
+              aria-label="Open Groot warning"
+            >
+              <span
+                key={warningPulseId}
+                className={`relative grid h-9 w-9 place-items-center rounded-full border border-red-300/50 bg-red-400/15 text-red-200 ${insightWarning.seen ? '' : 'groot-warning-bell'}`}
+              >
+                <Bell className="h-4 w-4" />
+                {!insightWarning.seen && (
+                  <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.9)]" />
+                )}
+              </span>
+              <span className="hidden pr-1 sm:block">
+                <span className="block text-xs font-black uppercase tracking-[0.2em]">Alert</span>
+                <span className="block text-xs font-semibold text-slate-300">Groot detected a warning</span>
+              </span>
+            </button>
+          )}
         </header>
+
+        <DeviceAgentCommandBar
+          devices={devices}
+          selectedRoom={selectedRoom}
+          onExecuteCommand={setDeviceStatus}
+          onAddDevice={addDeviceFromAgent}
+        />
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {rooms.map((room) => {
@@ -630,16 +1295,18 @@ const SmartControl = () => {
               </motion.div>
             </section>
 
-            <PageGrootInsight
-              page="Smart Control"
-              data={{
-                selectedRoom,
-                selectedRoomDevices: filteredDevices,
-                activeDevices,
-                totalWatts,
-                leakDevices,
-              }}
-            />
+            <div ref={insightRef} className="scroll-mt-6">
+              <PageGrootInsight
+                page="Smart Control"
+                data={{
+                  selectedRoom,
+                  selectedRoomDevices: filteredDevices,
+                  activeDevices,
+                  totalWatts,
+                  leakDevices,
+                }}
+              />
+            </div>
           </>
         )}
       </div>
@@ -652,6 +1319,16 @@ const SmartControl = () => {
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); border-radius: 999px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(34,197,94,0.5); border-radius: 999px; }
+        @keyframes groot-warning-bell {
+          0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+          12% { transform: translateY(-3px) rotate(-12deg) scale(1.05); }
+          24% { transform: translateY(1px) rotate(10deg) scale(1.02); }
+          36% { transform: translateY(-2px) rotate(-8deg) scale(1.04); }
+          48% { transform: translateY(0) rotate(6deg) scale(1); }
+        }
+        .groot-warning-bell {
+          animation: groot-warning-bell 0.9s ease-in-out 0s 3;
+        }
       `}</style>
     </div>
   );

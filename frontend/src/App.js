@@ -1,6 +1,8 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
+import ExplorePage from "./pages/ExplorePage";
+import IntroPage from "./pages/IntroPage";
 import LiveDashboard from "./pages/LiveDashboard";
 import UsageHistory from "./pages/UsageHistory";
 import SmartControl from "./pages/SmartControl";
@@ -36,7 +38,9 @@ function App() {
       <Layout>
         <PageErrorBoundary>
           <Routes>
-            <Route path="/" element={<LiveDashboard />} />
+            <Route path="/" element={<IntroPage />} />
+            <Route path="/live" element={<LiveDashboard />} />
+            <Route path="/explore" element={<ExplorePage />} />
             <Route path="/analytics" element={<UsageHistory />} />
             <Route path="/devices" element={<SmartControl />} />
             <Route path="/billing" element={<Invoices />} />

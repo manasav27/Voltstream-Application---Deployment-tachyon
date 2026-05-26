@@ -20,6 +20,7 @@ from database import (
     initialize_database,
 )
 from chat_routes import router as chat_router
+from agent_routes import router as agent_router
 
 app = FastAPI(title="VoltStream API")
 initialize_database()
@@ -32,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(chat_router)
+app.include_router(agent_router)
 
 @app.get("/api/v1/dashboard/live", response_model=LivePowerStatus)
 def get_live_dashboard():
@@ -89,7 +91,7 @@ def update_device(device_id: str, status: str = Query(...)):
                 name,
                 power_defaults.get(device["type"], 100)
             )
-        return update_device_power(device_id, status, power_draw_w)
+        return update_device_power(device_id, status, power_draw_w) #updates databse
     raise HTTPException(status_code=404, detail="Device not found")
 
 @app.post("/api/v1/devices", response_model=DeviceResponse)

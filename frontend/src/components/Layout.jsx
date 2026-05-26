@@ -1,16 +1,32 @@
 import { Link, useLocation } from "react-router-dom";
-import { Activity, BarChart2, Cpu, FileText } from "lucide-react";
+import { Activity, BarChart2, Compass, Cpu, FileText } from "lucide-react";
 import ChatWidget from "./ChatWidget";
 
 export default function Layout({ children }) {
   const location = useLocation();
+  const isIntroPage = location.pathname === "/";
+  const isExplorePage = location.pathname === "/explore";
 
   const navItems = [
-    { path: "/", label: "Live", icon: <Activity className="w-4 h-4" /> },
+    { path: "/live", label: "Live", icon: <Activity className="w-4 h-4" /> },
     { path: "/analytics", label: "Analytics", icon: <BarChart2 className="w-4 h-4" /> },
     { path: "/devices", label: "Devices", icon: <Cpu className="w-4 h-4" /> },
     { path: "/billing", label: "Billing", icon: <FileText className="w-4 h-4" /> },
+    { path: "/explore", label: "Explore", icon: <Compass className="w-4 h-4" /> },
   ];
+
+  if (isIntroPage) {
+    return <main className="min-h-screen bg-black">{children}</main>;
+  }
+
+  if (isExplorePage) {
+    return (
+      <main className="min-h-screen bg-black">
+        {children}
+        <ChatWidget hideLauncher />
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-black text-white font-sans">

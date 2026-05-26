@@ -27,7 +27,7 @@ const getInitialPosition = () => {
   return { x: 12, y: Math.max(96, window.innerHeight - 168) };
 };
 
-export default function ChatWidget() {
+export default function ChatWidget({ hideLauncher = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [activeBot, setActiveBot] = useState('bot');
@@ -61,6 +61,20 @@ export default function ChatWidget() {
       window.requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen, messages.length, activeBot]);
+
+  useEffect(() => {
+    const openFromExplore = (event) => {
+      const requestedMode = event.detail?.mode;
+      if (requestedMode === 'rag' || requestedMode === 'bot') {
+        setActiveBot(requestedMode);
+      }
+      setIsOpen(true);
+      setIsMaximized(false);
+    };
+
+    window.addEventListener('voltstream-open-groot', openFromExplore);
+    return () => window.removeEventListener('voltstream-open-groot', openFromExplore);
+  }, []);
 
   const scrollToLatest = () => {
     window.requestAnimationFrame(() => {
@@ -229,7 +243,7 @@ export default function ChatWidget() {
         />
       )}
 
-      {!isOpen && (
+      {!isOpen && !hideLauncher && (
         <ChatLauncher
           isOpen={isOpen}
           onPointerDown={handleOrbPointerDown}

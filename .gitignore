@@ -9,7 +9,7 @@ node_modules/
 /build
 /coverage
 
-# logs
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -49,6 +49,19 @@ backend/chroma_db/
 # Virtual environment
 # ======================
 venv/
+.venv/
+
+# ======================
+# Google Cloud / Secrets
+# ======================
+*.json
+backend/*.json
+
+# ======================
+# IDE files
+# ======================
+.vscode/
+.idea/
 
 # ======================
 # OS files

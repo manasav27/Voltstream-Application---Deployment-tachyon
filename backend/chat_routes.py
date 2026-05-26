@@ -2,7 +2,7 @@ import os
 import json
 import re
 
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 
@@ -11,9 +11,10 @@ from models import ChatRequest, ChatResponse, PageInsightRequest, PageInsightRes
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY) # connect gemini sdk with api key
-model = genai.GenerativeModel("models/gemini-2.5-flash")
+client = genai.Client()
+MODEL_NAME = os.getenv("GEMINI_MODEL")
+if not MODEL_NAME:
+    raise RuntimeError("GEMINI_MODEL is missing from backend/.env")
 
 router = APIRouter(prefix="/api/v1") # addssame route for each begining like chat/page isnights
 
@@ -65,8 +66,11 @@ async def chat_with_ai(request: ChatRequest): #“When someone hits /chat, run t
         Question:
         {question}
         """
-        response = model.generate_content(prompt)
-        answer = remove_self_intro(response.text) # Remove self-intro if present
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+        )
+        answer = remove_self_intro(response.text or "") # Remove self-intro if present
         return {
             "answer": answer or "I don't know that."
         }
@@ -94,8 +98,11 @@ async def page_insight(request: PageInsightRequest):
         Page data JSON:
         {json.dumps(request.data, indent=2)}
         """
-        response = model.generate_content(prompt)
-        answer = remove_self_intro(response.text) # Remove self-intro if present
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+        )
+        answer = remove_self_intro(response.text or "") # Remove self-intro if present
         return {"answer": answer or "I don't know that."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

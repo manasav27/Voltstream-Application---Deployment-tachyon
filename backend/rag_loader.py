@@ -11,7 +11,7 @@ COLLECTION_NAME = "energy_docs"
 # Load embedding model
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Create persistent ChromaDB database
+# Create/opens persistent ChromaDB database
 client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
 # Function to split text into chunks
@@ -20,7 +20,7 @@ def chunk_text(text, chunk_size=120, overlap=30):
     chunks = []
     step = chunk_size - overlap
     for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i + chunk_size])
+        chunk = " ".join(words[i:i + chunk_size]) # creates 1 chunk
         if chunk:
             chunks.append(chunk)
     return chunks
@@ -34,15 +34,15 @@ def load_pdfs():
         pass
 
     collection = client.get_or_create_collection(name=COLLECTION_NAME)
-    for pdf_path in sorted(PDF_FOLDER.glob("*.pdf")):
+    for pdf_path in sorted(PDF_FOLDER.glob("*.pdf")): # loops through all pdf's
         print(f"Loading {pdf_path.name}...")
-        reader = PdfReader(str(pdf_path))
+        reader = PdfReader(str(pdf_path)) #opens pdf
         full_text = "\n".join(page.extract_text() or "" for page in reader.pages)
         chunks = chunk_text(full_text)
         print(f"Created {len(chunks)} chunks")
 
-        for index, chunk in enumerate(chunks):
-            embedding = model.encode(chunk).tolist()
+        for index, chunk in enumerate(chunks): #takes chunks 
+            embedding = model.encode(chunk).tolist() # converts to embeddings
             collection.add(
                 documents=[chunk],
                 embeddings=[embedding],

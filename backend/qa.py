@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import chromadb
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 import os
 from pathlib import Path
@@ -24,11 +24,10 @@ SELF_INTRO_PREFIX_PATTERN = re.compile(
 # Load .env variables
 load_dotenv()
 
-# Gemini API Key
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Gemini model
-gemini_model = genai.GenerativeModel("models/gemini-2.5-flash")
+genai_client = genai.Client()
+MODEL_NAME = os.getenv("GEMINI_MODEL")
+if not MODEL_NAME:
+    raise RuntimeError("GEMINI_MODEL is missing from backend/.env")
 
 
 router = APIRouter() # Create a new router for Q&A related endpoints. This allows us to keep the code organized and modular.
@@ -96,10 +95,14 @@ def ask_question(data: QuestionRequest):
     {question}
     """
     # Generate response
-    response = gemini_model.generate_content(prompt)
-    answer = SELF_INTRO_PREFIX_PATTERN.sub("", response.text.strip()).strip()
+    response = genai_client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+    )
+    answer_text = response.text or ""
+    answer = SELF_INTRO_PREFIX_PATTERN.sub("", answer_text.strip()).strip()
 
     # Return answer
     return {
-        "answer": answer or response.text.strip()
+        "answer": answer or answer_text.strip()
     }
