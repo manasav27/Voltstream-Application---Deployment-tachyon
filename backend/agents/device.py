@@ -5,12 +5,10 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 from appliance_control import DEVICE_POWER_DEFAULTS
-from database import get_device, get_devices, update_device_power
+from db.database import get_device, get_devices, update_device_power
+from prompts import DEVICE_AGENT_PROMPT
 
 try:
     from google.adk.agents import Agent
@@ -24,18 +22,44 @@ except ImportError:
     types = None
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
-
-router = APIRouter(prefix="/api/v1")
 
 APP_NAME = "voltstream-device-control"
 USER_ID = "voltstream-demo-user"
 SESSION_ID = "voltstream-demo-session"
 
 
-class AgentRequest(BaseModel):
-    message: str
+def tool_annotation(
+    *,
+    name: str,
+    purpose: str,
+    when_to_use: str,
+    parameters: Dict[str, str],
+    returns: str,
+) -> Any:
+    """Attach passive tool metadata without changing tool behavior."""
+    def decorate(func: Any) -> Any:
+        func.tool_annotation = {
+            "name": name,
+            "purpose": purpose,
+            "when_to_use": when_to_use,
+            "parameters": parameters,
+            "returns": returns,
+        }
+        return func
+
+    return decorate
+
+
+def build_device_agent(agent_class: Any, model_name: str, tools: list) -> Any:
+    return agent_class(
+        name="voltstream_device_control_agent",
+        model=model_name,
+        description="Controls VoltStream smart home devices.",
+        instruction=DEVICE_AGENT_PROMPT,
+        tools=tools,
+    )
 
 
 def _device_payload(device: Dict[str, Any]) -> Dict[str, Any]:
@@ -110,6 +134,17 @@ def _device_matches_room(device: Dict[str, Any], normalized_room: str) -> bool:
     return device_room == normalized_room or normalized_room in device_name
 
 
+@tool_annotation(
+    name="get_device_status",
+    purpose="Read the current status and power draw for one VoltStream smart device.",
+    when_to_use="Use for status questions or before changing a named device.",
+    parameters={
+        "device_id": "Known device id such as dev_1. Optional when device_name is provided.",
+        "device_name": "Natural device name such as AC, fan, refrigerator, lamp, TV, or heater.",
+        "room": "Optional room hint when multiple devices may match.",
+    },
+    returns="ok flag plus the matched device payload, or an error if no device matches.",
+)
 def get_device_status(device_id: str = "", device_name: str = "", room: str = "") -> Dict[str, Any]:
     """Return the current VoltStream device status by device ID or device name."""
     device = get_device(device_id.strip()) if device_id else None
@@ -121,6 +156,16 @@ def get_device_status(device_id: str = "", device_name: str = "", room: str = ""
     return {"ok": True, "device": _device_payload(device)}
 
 
+@tool_annotation(
+    name="toggle_device",
+    purpose="Turn exactly one VoltStream smart device ON or OFF.",
+    when_to_use="Use when the user asks to switch, turn, or power a specific device on or off.",
+    parameters={
+        "device_id": "Exact id of the device to update.",
+        "state": "Desired state. Must be ON or OFF.",
+    },
+    returns="ok flag plus the updated device payload, or an error if the state/device is invalid.",
+)
 def toggle_device(device_id: str, state: str) -> Dict[str, Any]:
     """Turn a VoltStream device ON or OFF and return its updated status."""
     normalized_state = state.strip().upper()
@@ -136,6 +181,16 @@ def toggle_device(device_id: str, state: str) -> Dict[str, Any]:
     return {"ok": True, "device": _device_payload(updated_device)}
 
 
+@tool_annotation(
+    name="toggle_all_devices",
+    purpose="Turn all VoltStream smart devices ON or OFF, optionally within one room.",
+    when_to_use="Use for bulk commands like all devices off, every device on, or kitchen devices off.",
+    parameters={
+        "state": "Desired bulk state. Must be ON or OFF.",
+        "room": "Optional room filter such as Living Room, Kitchen, Bedroom, or Bathroom.",
+    },
+    returns="ok flag, updated count, scope details, and updated device payloads.",
+)
 def toggle_all_devices(state: str, room: str = "") -> Dict[str, Any]:
     """Turn all VoltStream devices ON or OFF, optionally limited to one room."""
     normalized_state = state.strip().upper()
@@ -172,29 +227,14 @@ def _build_agent() -> Any:
     if not model_name:
         raise RuntimeError("ADK_MODEL or GEMINI_MODEL is missing from backend/.env")
 
-    return Agent(
-        name="voltstream_device_control_agent",
-        model=model_name,
-        description="Controls VoltStream smart home devices.",
-        instruction=(
-            "You are VoltStream's device-control agent. "
-            "Use get_device_status to inspect devices and toggle_device to change one device. "
-            "For status questions, call get_device_status with device_name when the user gives "
-            "a device name such as AC, washing machine, refrigerator, fan, lamp, TV, or heater. "
-            "Use toggle_all_devices when the user asks to turn all devices, every device, "
-            "or a room's devices on or off. "
-            "For 'Air Conditioning' or 'AC', use device_id dev_1 unless the user names another room. "
-            "When the user asks to turn a device off, call toggle_device with state OFF. "
-            "When the user asks to turn a device on, call toggle_device with state ON. "
-            "When the user asks to turn all devices off, call toggle_all_devices with state OFF. "
-            "When the user asks to turn all devices on, call toggle_all_devices with state ON. "
-            "After using a tool, summarize the updated device status."
-        ),
-        tools=[get_device_status, toggle_device, toggle_all_devices],
+    return build_device_agent(
+        Agent,
+        model_name,
+        [get_device_status, toggle_device, toggle_all_devices],
     )
 
 
-async def _run_adk_agent(message: str) -> Dict[str, Any]:
+async def run_adk_device_agent(message: str) -> Dict[str, Any]:
     if Agent is None:
         raise RuntimeError("Google ADK is not installed. Install google-adk to run the ADK path.")
 
@@ -266,22 +306,10 @@ async def _run_adk_agent(message: str) -> Dict[str, Any]:
     }
 
 
-async def _agent_events(message: str) -> AsyncIterator[str]:
+async def device_agent_events(message: str) -> AsyncIterator[str]:
     yield json.dumps({"event": "start", "message": message}) + "\n"
     try:
-        result = await _run_adk_agent(message)
+        result = await run_adk_device_agent(message)
         yield json.dumps({"event": "final", "data": result}) + "\n"
     except Exception as exc:
         yield json.dumps({"event": "error", "detail": str(exc)}) + "\n"
-
-
-@router.post("/agent")
-async def run_device_agent(request: AgentRequest):
-    message = request.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="Message is required.")
-
-    return StreamingResponse(
-        _agent_events(message),
-        media_type="application/x-ndjson",
-    )

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageGrootInsight from '../components/PageGrootInsight';
+import FormattedMessage from '../components/chat/FormattedMessage';
 import { DeviceCard, ProactiveLeakDetector, SummaryCard } from '../components/smart-control/DeviceWidgets';
 import {
   extractRequestedDeviceName,
@@ -25,6 +26,7 @@ import {
   getRoomOptionText,
   getSavingsInsight,
   inferDeviceType,
+  isAddableSmartDeviceName,
   isDeviceControlCommand,
   isDeviceStatusCommand,
   isPreviousDeviceReference,
@@ -48,6 +50,7 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
   const scheduledTimersRef = useRef([]);
   const undoTimerRef = useRef(null);
   const lastDeviceRef = useRef(null);
+  const lastBulkActionRef = useRef(null);
 
   useEffect(() => () => {
     scheduledTimersRef.current.forEach((timerId) => clearTimeout(timerId));
@@ -153,6 +156,14 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
           updatedDevice: hydratedDevice,
         };
       });
+      const rememberedBulkDevices = updates.map(({ originalDevice, updatedDevice }) => updatedDevice || originalDevice);
+      lastBulkActionRef.current = {
+        type: 'bulk',
+        action: bulkRequest.action,
+        label: bulkRequest.label,
+        sourceState: bulkRequest.sourceState,
+        devices: rememberedBulkDevices,
+      };
 
       setAgentState({
         type: 'done',
@@ -240,6 +251,77 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
   const confirmBulkAction = async () => {
     if (!agentState?.bulkRequest) return;
     await executeBulkDeviceAction(agentState.bulkRequest, agentState.command);
+  };
+
+  const confirmPreviousBulkAction = async () => {
+    if (!agentState?.bulkMemory || !agentState?.action || isExecuting) return;
+
+    setIsExecuting(true);
+    try {
+      const bulkMemory = agentState.bulkMemory;
+      const previousStates = bulkMemory.devices.map((device) => {
+        const currentDevice = devices.find((item) => item.id === device.id) || device;
+        return {
+          device: currentDevice,
+          previousStatus: currentDevice.is_on ? 'ON' : currentDevice.status || 'OFF',
+        };
+      });
+      const devicesToUpdate = previousStates.filter(({ previousStatus }) => previousStatus !== agentState.action);
+      if (devicesToUpdate.length === 0) {
+        setAgentState({
+          type: 'done',
+          command: agentState.command,
+          action: agentState.action,
+          message: `Yes, those ${bulkMemory.label} have been turned ${agentState.action}.`,
+          detail: 'previous group already matched',
+        });
+        return;
+      }
+
+      const restoredDevices = await Promise.all(
+        devicesToUpdate.map(({ device }) => onExecuteCommand(device.id, agentState.action))
+      );
+      const updatedById = new Map(
+        restoredDevices.map((updatedDevice, index) => [
+          (updatedDevice || devicesToUpdate[index].device).id,
+          updatedDevice || devicesToUpdate[index].device,
+        ])
+      );
+      const rememberedDevices = previousStates.map(({ device }) =>
+        updatedById.get(device.id) || device
+      );
+
+      lastBulkActionRef.current = {
+        ...bulkMemory,
+        action: agentState.action,
+        devices: rememberedDevices,
+      };
+
+      setAgentState({
+        type: 'done',
+        command: agentState.command,
+        action: agentState.action,
+        message: `${rememberedDevices.length} ${bulkMemory.label} turned ${agentState.action}`,
+        detail: 'previous group selected',
+      });
+
+      startUndoTimer({
+        type: 'bulk',
+        devices: devicesToUpdate.map(({ device, previousStatus }) => ({
+          device: updatedById.get(device.id) || device,
+          previousStatus,
+        })),
+        command: agentState.command,
+      });
+    } catch (error) {
+      setAgentState({
+        type: 'error',
+        command: agentState.command,
+        message: "Couldn't update the previous device group. Please try again.",
+      });
+    } finally {
+      setIsExecuting(false);
+    }
   };
 
   const undoLastAction = async () => {
@@ -336,12 +418,97 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
     const schedule = getCommandSchedule(trimmedCommand);
     const matches = findCommandMatches(devices, trimmedCommand);
     const bulkRequest = getBulkCommandRequest(trimmedCommand, devices, action);
+    const isPreviousReference = isPreviousDeviceReference(trimmedCommand);
+    const isPreviousGroupReference = /\b(them|those)\b/i.test(trimmedCommand);
+
+    if (/^\s*(hi|hello|hey|hii|hai|yo|good\s+(morning|afternoon|evening)|namaste)\s*[!.?]*\s*$/i.test(trimmedCommand)) {
+      setAgentState({
+        type: 'done',
+        command: trimmedCommand,
+        message: 'Hi, I am Groot, your device-control agent. I can control your smart devices from here.',
+      });
+      return;
+    }
 
     if (!isDeviceControlCommand(trimmedCommand)) {
+      setIsExecuting(true);
+      try {
+        const agentResult = await runAgentCommand(trimmedCommand);
+        setAgentState({
+          type: 'outOfScope',
+          command: trimmedCommand,
+          message: agentResult?.answer || 'I cannot help with that action. I can only check or control smart devices from this page.',
+        });
+      } catch (error) {
+        setAgentState({
+          type: 'error',
+          command: trimmedCommand,
+          message: "Couldn't reach the device agent. Please try again.",
+        });
+      } finally {
+        setIsExecuting(false);
+      }
+      return;
+    }
+
+    if (isPreviousGroupReference && action) {
+      const previousBulkAction = lastBulkActionRef.current;
+      if (!previousBulkAction) {
+        setAgentState({
+          type: 'error',
+          command: trimmedCommand,
+          message: "You previously didn't turn any device group on or off in this session.",
+        });
+        return;
+      }
+      const rememberedDevices = previousBulkAction.devices.map((device) =>
+        devices.find((item) => item.id === device.id) || device
+      );
+      const devicesToUpdate = rememberedDevices.filter((device) => {
+        const currentStatus = device.is_on ? 'ON' : device.status || 'OFF';
+        return currentStatus !== action;
+      });
+      if (devicesToUpdate.length === 0) {
+        setAgentState({
+          type: 'done',
+          command: trimmedCommand,
+          action,
+          message: `Yes, those ${previousBulkAction.label} have been turned ${action}.`,
+          detail: 'previous group already matched',
+        });
+        return;
+      }
+
       setAgentState({
-        type: 'outOfScope',
+        type: 'confirmPreviousBulk',
         command: trimmedCommand,
-        message: "I can only control smart devices. I don't have the information you're asking about.",
+        bulkMemory: {
+          ...previousBulkAction,
+          devices: rememberedDevices,
+        },
+        action,
+        message: `Do you want me to turn ${action === 'ON' ? 'on' : 'off'} those previously turned ${previousBulkAction.action} ${previousBulkAction.label}?`,
+      });
+      return;
+    }
+
+    if (isPreviousReference && action) {
+      const previousDevice = lastDeviceRef.current;
+      if (!previousDevice) {
+        setAgentState({
+          type: 'error',
+          command: trimmedCommand,
+          message: "You previously didn't turn any device on or off in this session.",
+        });
+        return;
+      }
+
+      setAgentState({
+        type: 'confirmPrevious',
+        command: trimmedCommand,
+        device: previousDevice,
+        action,
+        message: `Do you want me to turn ${action === 'ON' ? 'on' : 'off'} the previous device, ${previousDevice.name}?`,
       });
       return;
     }
@@ -417,13 +584,22 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
     if (matches.length === 0) {
       const deviceName = extractRequestedDeviceName(trimmedCommand);
       const previousDevice = lastDeviceRef.current;
-      if (previousDevice && isPreviousDeviceReference(trimmedCommand)) {
+      if (previousDevice && isPreviousReference) {
         setAgentState({
           type: 'confirmPrevious',
           command: trimmedCommand,
           device: previousDevice,
           action,
           message: `Do you want me to turn ${action === 'ON' ? 'on' : 'off'} the previous device, ${previousDevice.name}?`,
+        });
+        return;
+      }
+
+      if (!isAddableSmartDeviceName(deviceName)) {
+        setAgentState({
+          type: 'outOfScope',
+          command: trimmedCommand,
+          message: `I couldn't find "${deviceName || 'that'}" as a smart device. Please check the device name and try again.`,
         });
         return;
       }
@@ -621,14 +797,14 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
                 <div className="mt-3 flex items-center gap-3 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-sm font-black text-emerald-300">
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
                   <div>
-                    {agentState.message}
+                    <FormattedMessage text={agentState.message} isUser={false} />
                     {agentState.detail && <span className="ml-2 font-semibold text-emerald-100/70">({agentState.detail})</span>}
                   </div>
                 </div>
 
                 {agentState.insight && (
                   <div className="mt-3 rounded-xl border border-violet-400/40 bg-violet-400/10 px-3 py-2 text-sm font-black text-violet-200">
-                    {agentState.insight}
+                    <FormattedMessage text={agentState.insight} isUser={false} />
                   </div>
                 )}
 
@@ -757,6 +933,32 @@ const DeviceAgentCommandBar = ({ devices, selectedRoom, onExecuteCommand, onAddD
                   <button
                     type="button"
                     onClick={confirmPreviousDevice}
+                    disabled={isExecuting}
+                    className="min-h-[36px] rounded-lg bg-orange-500 px-4 text-sm font-black text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Yes, do it
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentState(null)}
+                    className="min-h-[36px] rounded-lg border border-white/10 px-4 text-sm font-black text-slate-400 transition hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {agentState.type === 'confirmPreviousBulk' && (
+              <div className="mt-3">
+                <div className="rounded-xl border border-orange-400/60 bg-orange-400/10 px-3 py-2 text-sm font-black text-orange-300">
+                  <HelpCircle className="mr-2 inline h-4 w-4" />
+                  {agentState.message}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmPreviousBulkAction}
                     disabled={isExecuting}
                     className="min-h-[36px] rounded-lg bg-orange-500 px-4 text-sm font-black text-white transition hover:bg-orange-400 disabled:cursor-wait disabled:opacity-60"
                   >

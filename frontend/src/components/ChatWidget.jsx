@@ -157,6 +157,7 @@ export default function ChatWidget({ hideLauncher = false }) {
 
     try {
       let answer = '';
+      let responseData = null;
 
       for (const apiBase of API_BASES) {
         try {
@@ -166,10 +167,11 @@ export default function ChatWidget({ hideLauncher = false }) {
             { question: trimmedQuestion },
             { signal: requestController.signal }
           );
-          answer = response.data?.answer || 'I received your question, but there was no answer text.';
-          if (response.data?.device) {
+          responseData = response.data || {};
+          answer = responseData.answer || 'I received your question, but there was no answer text.';
+          if (responseData.device) {
             window.dispatchEvent(new CustomEvent('voltstream-device-updated', {
-              detail: response.data.device,
+              detail: responseData.device,
             }));
           }
           break;
@@ -180,7 +182,14 @@ export default function ChatWidget({ hideLauncher = false }) {
         }
       }
 
-      setActiveMessages((current) => [...current, { role: 'bot', text: answer }]);
+      setActiveMessages((current) => [
+        ...current,
+        {
+          role: 'bot',
+          text: answer,
+          agent: responseData?.agent,
+        },
+      ]);
     } catch (error) {
       if (axios.isCancel(error) || error.name === 'CanceledError') {
         setActiveMessages((current) => [

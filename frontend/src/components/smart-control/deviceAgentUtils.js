@@ -36,11 +36,18 @@ export const getCommandAction = (text) => {
   const lower = text.toLowerCase();
   if (/\bto\s+off\b/.test(lower)) return 'OFF';
   if (/\bto\s+on\b/.test(lower)) return 'ON';
+  if (/\b(turn|switch|power)\s+(it|them|those|that|this|same|previous|last)\s+off\b/.test(lower)) return 'OFF';
+  if (/\b(turn|switch|power)\s+(it|them|those|that|this|same|previous|last)\s+on\b/.test(lower)) return 'ON';
   if (/\b(turn|switch|power)\s+off\b/.test(lower)) return 'OFF';
   if (/\b(turn|switch|power)\s+on\b/.test(lower)) return 'ON';
+  if (/^\s*(please\s+)?off\s*$/i.test(text)) return 'OFF';
+  if (/^\s*(please\s+)?on\s*$/i.test(text)) return 'ON';
 
-  const stateWords = lower.match(/\b(on|off)\b/g);
-  if (stateWords?.length) return stateWords[stateWords.length - 1].toUpperCase();
+  const targetThenState = /\b(ac|air\s*conditioner|air\s*conditioning|lights?|lamps?|fans?|heaters?|charger|tv|washing machine|refrigerator|water heater)\b.*\b(on|off)\b/.exec(lower);
+  if (targetThenState) return targetThenState[2].toUpperCase();
+
+  const stateThenTarget = /\b(on|off)\b.*\b(ac|air\s*conditioner|air\s*conditioning|lights?|lamps?|fans?|heaters?|charger|tv|washing machine|refrigerator|water heater)\b/.exec(lower);
+  if (stateThenTarget) return stateThenTarget[1].toUpperCase();
 
   return null;
 };
@@ -64,6 +71,9 @@ export const inferDeviceType = (name) => {
   return 'Appliance';
 };
 
+export const isAddableSmartDeviceName = (name) =>
+  /\b(ac|air\s*conditioner|air\s*conditioning|light|lamp|fan|heater|charger|ev|tv|television|washing machine|washer|refrigerator|fridge|water heater|dishwasher|oven|coffee maker|pump|humidifier|dehumidifier|air purifier|thermostat|smart plug)\b/i.test(name);
+
 const formatINRSimple = (amount) => new Intl.NumberFormat('en-IN', {
   style: 'currency',
   currency: 'INR',
@@ -79,14 +89,20 @@ export const getSavingsInsight = (device, action) => {
 
 export const isDeviceControlCommand = (text) => {
   const lower = text.toLowerCase();
-  return /\b(turn|switch|power)\b|\b(on|off)\b|\bschedule\b|\bcontrol\b|\bdevice\b|\bac\b|\blights?\b|\blamps?\b|\bfans?\b|\bheaters?\b|\bcharger\b|\btv\b|\bwashing machine\b|\brefrigerator\b|\bwater heater\b/.test(lower);
+  return /^\s*(please\s+)?(on|off)\s*$/i.test(text)
+    || /\b(turn|switch|power|toggle)\b/.test(lower)
+    || /\bschedule\b/.test(lower)
+    || /\bcontrol\b/.test(lower)
+    || /\bdevices?\b/.test(lower)
+    || /\bappliances?\b/.test(lower)
+    || /\bac\b|\bair\s*conditioner\b|\bair\s*conditioning\b|\blights?\b|\blamps?\b|\bfans?\b|\bheaters?\b|\bcharger\b|\btv\b|\bwashing machine\b|\brefrigerator\b|\bwater heater\b/.test(lower);
 };
 
 export const isDeviceStatusCommand = (text) =>
   /\b(status|state|running|active|on or off)\b/i.test(text);
 
 export const isPreviousDeviceReference = (text) =>
-  /\b(it|that|this|same|previous|last)\b/i.test(text)
+  /\b(it|them|those|that|this|same|previous|last)\b/i.test(text)
   || /^\s*(please\s+)?(turn|switch|power)\s+(on|off)\s*$/i.test(text)
   || /^\s*(on|off)\s*$/i.test(text);
 

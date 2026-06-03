@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import Lock
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "voltstream.db"
 
 _init_lock = Lock()

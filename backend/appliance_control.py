@@ -1,7 +1,7 @@
 import re
 from threading import Timer
 
-from database import get_devices, update_device_power
+from db.database import get_devices, update_device_power
 
 
 DEVICE_POWER_DEFAULTS = {

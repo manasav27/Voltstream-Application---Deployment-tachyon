@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 class LivePowerStatus(BaseModel):
     grid_draw_kw: float
@@ -36,11 +36,15 @@ class BillingSummary(BaseModel):
 # NEW CHAT REQUEST MODEL
 class ChatRequest(BaseModel):
     question: str
+    session_id: Optional[str] = None
 
 # NEW CHAT RESPONSE MODEL
 class ChatResponse(BaseModel):
     answer: str
     device: Optional[DeviceResponse] = None
+    agent: Optional[str] = None
+    route: Optional[str] = None
+    trace: Optional[List[Dict[str, Any]]] = None
 
 class PageInsightRequest(BaseModel):
     page: str
@@ -49,3 +53,9 @@ class PageInsightRequest(BaseModel):
 
 class PageInsightResponse(BaseModel):
     answer: str
+
+class AgentRequest(BaseModel):
+    message: str
+
+class QuestionRequest(BaseModel):
+    question: str
